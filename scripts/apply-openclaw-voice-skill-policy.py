@@ -19,7 +19,7 @@ function isPreauthorizedVoiceSkillAction(params) {
 	const wrapper = path.join(os.homedir(), ".local", "bin", "openclaw-voice-skill-action");
 	const escaped = wrapper.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 	const payload = "[A-Za-z0-9._~%+-]+";
-	return new RegExp(`^${escaped} (?:wow-server-(?:start|stop)|(?:alexa-smart-home|azeroth-gm-safe) (?:${payload}|"${payload}"))$`).test(command);
+	return new RegExp(`^${escaped} (?:wow-server-(?:start|stop)|(?:alexa-smart-home|azeroth-gm-safe) (?:${payload}|"${payload}"|'${payload}'))$`).test(command);
 }
 '''
 
