@@ -1,0 +1,293 @@
+diff --git a/docker/firmware-builder/firmware_builder.py b/docker/firmware-builder/firmware_builder.py
+index d632aea..85a4e1e 100644
+--- a/docker/firmware-builder/firmware_builder.py
++++ b/docker/firmware-builder/firmware_builder.py
+@@ -28,7 +28,7 @@ from typing import Any, Sequence
+ SAFE_BOARD_DIR = re.compile(r"^[a-z0-9][a-z0-9._/-]*$")
+ SAFE_REPORTED_IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9.-]*$")
+ SAFE_JOB_ID = re.compile(r"^[a-z0-9][a-z0-9.-]*$")
+-SAFE_WAKE_WORD = re.compile(r"^(?:disabled|nihaoxiaozhi|wn9[sl]?_[a-z0-9_]+)$")
++SAFE_WAKE_WORD = re.compile(r"^(?:disabled|hey_jarvis|nihaoxiaozhi|wn9[sl]?_[a-z0-9_]+)$")
+ ARTIFACTS = {
+     "ota": Path("build/xiaozhi.bin"),
+     "full": Path("build/merged-binary.bin"),
+diff --git a/main/application.cc b/main/application.cc
+index 31de205..d775577 100644
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -210,11 +210,19 @@ void Application::Run() {
+ 
+         if (bits & MAIN_EVENT_STATE_CHANGED) {
+             HandleStateChangedEvent();
++            if (protocol_ && protocol_->IsAudioChannelOpened()) {
++                protocol_->SendDeviceState(DeviceStateMachine::GetStateName(GetDeviceState()));
++            }
+         }
+ 
+         if (bits & MAIN_EVENT_PLAYBACK_DRAINED) {
+             if (audio_service_.IsPlaybackIdle()) {
+                 notify_player_.OnPlaybackDrained();
++                if (tts_stream_end_pending_ && GetDeviceState() == kDeviceStateSpeaking && protocol_) {
++                    tts_stream_end_pending_ = false;
++                    protocol_->SendPlaybackDrained();
++                    SetDeviceState(kDeviceStateListening);
++                }
+             }
+             // Deferred listening start (auto mode): the playback queue has
+             // drained, so it is now safe to enable voice processing.
+@@ -624,10 +632,24 @@ void Application::InitializeProtocol() {
+             if (strcmp(state->valuestring, "start") == 0) {
+                 Schedule([this]() {
+                     aborted_ = false;
++                    tts_stream_end_pending_ = false;
+                     SetDeviceState(kDeviceStateSpeaking);
+                 });
++            } else if (strcmp(state->valuestring, "stream_end") == 0) {
++                Schedule([this]() {
++                    if (GetDeviceState() != kDeviceStateSpeaking || !protocol_) {
++                        return;
++                    }
++                    if (audio_service_.IsPlaybackIdle()) {
++                        protocol_->SendPlaybackDrained();
++                        SetDeviceState(kDeviceStateListening);
++                    } else {
++                        tts_stream_end_pending_ = true;
++                    }
++                });
+             } else if (strcmp(state->valuestring, "stop") == 0) {
+                 Schedule([this]() {
++                    tts_stream_end_pending_ = false;
+                     if (GetDeviceState() == kDeviceStateSpeaking) {
+                         if (listening_mode_ == kListeningModeManualStop) {
+                             SetDeviceState(kDeviceStateIdle);
+diff --git a/main/application.h b/main/application.h
+index f2b9a00..89e4366 100644
+--- a/main/application.h
++++ b/main/application.h
+@@ -151,6 +151,7 @@ private:
+     bool assets_version_checked_ = false;
+     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
+     bool pending_listening_start_ = false;  // Waiting for playback to drain before starting listening (auto mode)
++    bool tts_stream_end_pending_ = false;   // Server sent all audio; waiting for physical playback drain
+     int clock_ticks_ = 0;
+     TaskHandle_t activation_task_handle_ = nullptr;
+ 
+diff --git a/main/boards/common/wifi_board.cc b/main/boards/common/wifi_board.cc
+index 5b3721d..356bc82 100644
+--- a/main/boards/common/wifi_board.cc
++++ b/main/boards/common/wifi_board.cc
+@@ -161,10 +161,15 @@ void WifiBoard::SetNetworkEventCallback(NetworkEventCallback callback) {
+ 
+ void WifiBoard::OnWifiConnectTimeout(void* arg) {
+     auto* board = static_cast<WifiBoard*>(arg);
+-    ESP_LOGW(TAG, "WiFi connection timeout, entering config mode");
+-
+     WifiManager::GetInstance().StopStation();
+-    board->StartWifiConfigMode();
++    if (board->EnterConfigModeOnConnectTimeout()) {
++        ESP_LOGW(TAG, "WiFi connection timeout, entering config mode");
++        board->StartWifiConfigMode();
++        return;
++    }
++
++    ESP_LOGW(TAG, "WiFi connection timeout, retrying saved networks");
++    board->TryWifiConnect();
+ }
+ 
+ void WifiBoard::StartWifiConfigMode() {
+diff --git a/main/boards/common/wifi_board.h b/main/boards/common/wifi_board.h
+index 7ee973c..5b1f1db 100644
+--- a/main/boards/common/wifi_board.h
++++ b/main/boards/common/wifi_board.h
+@@ -31,6 +31,13 @@ protected:
+      */
+     void StartWifiConfigMode();
+ 
++    /**
++     * Whether a timed-out station connection should fall back to provisioning.
++     * Boards intended for unattended operation can override this and keep
++     * retrying the saved networks instead.
++     */
++    virtual bool EnterConfigModeOnConnectTimeout() const { return true; }
++
+     /**
+      * WiFi connection timeout callback
+      */
+diff --git a/main/boards/waveshare/esp32-s3-touch-lcd-4b/config.json b/main/boards/waveshare/esp32-s3-touch-lcd-4b/config.json
+index 42fbf22..b70bcc8 100644
+--- a/main/boards/waveshare/esp32-s3-touch-lcd-4b/config.json
++++ b/main/boards/waveshare/esp32-s3-touch-lcd-4b/config.json
+@@ -7,8 +7,9 @@
+             "name": "esp32-s3-touch-lcd-4b",
+             "sdkconfig_append": [
+                 "CONFIG_USE_WECHAT_MESSAGE_STYLE=n",
+-                "CONFIG_USE_DEVICE_AEC=y"
++                "CONFIG_USE_DEVICE_AEC=y",
++                "CONFIG_OTA_URL=\"http://192.168.178.143:8766/xiaozhi/ota/\""
+             ]
+         }
+     ]
+-}
+\ No newline at end of file
++}
+diff --git a/main/boards/waveshare/esp32-s3-touch-lcd-4b/esp32-s3-touch-lcd-4b.cc b/main/boards/waveshare/esp32-s3-touch-lcd-4b/esp32-s3-touch-lcd-4b.cc
+index 9ab6535..3314af0 100644
+--- a/main/boards/waveshare/esp32-s3-touch-lcd-4b/esp32-s3-touch-lcd-4b.cc
++++ b/main/boards/waveshare/esp32-s3-touch-lcd-4b/esp32-s3-touch-lcd-4b.cc
+@@ -116,16 +116,10 @@ private:
+     bool key_handled;
+ 
+     void InitializePowerSaveTimer() {
+-        power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
+-        power_save_timer_->OnEnterSleepMode([this]() {
+-            GetDisplay()->SetPowerSaveMode(true);
+-            GetBacklight()->SetBrightness(70); });
+-        power_save_timer_->OnExitSleepMode([this]() {
+-            GetDisplay()->SetPowerSaveMode(false);
+-            GetBacklight()->RestoreBrightness(); });
+-        power_save_timer_->OnShutdownRequest([this](){ 
+-            pmic_->PowerOff(); });
+-        power_save_timer_->SetEnabled(true);
++        // This wall-powered voice terminal must remain available around the
++        // clock. Disable CPU/display sleep and PMIC shutdown permanently.
++        power_save_timer_ = new PowerSaveTimer(-1, -1, -1);
++        power_save_timer_->SetEnabled(false);
+     }
+ 
+     void InitializeCodecI2c() {
+@@ -406,6 +400,15 @@ public:
+         return &audio_codec;
+     }
+ 
++protected:
++    bool EnterConfigModeOnConnectTimeout() const override {
++        // Keep reconnecting saved networks indefinitely. Provisioning remains
++        // available explicitly via the boot button or MCP tool.
++        return false;
++    }
++
++public:
++
+     virtual Display* GetDisplay() override {
+         return display_;
+     }
+@@ -416,24 +419,17 @@ public:
+     }
+ 
+     virtual bool GetBatteryLevel(int &level, bool &charging, bool &discharging) override {
+-        static bool last_discharging = false;
+         charging = pmic_->IsCharging();
+         discharging = pmic_->IsDischarging();
+-        if (discharging != last_discharging)
+-        {
+-            power_save_timer_->SetEnabled(discharging);
+-            last_discharging = discharging;
+-        }
+ 
+         level = pmic_->GetBatteryLevel();
+         return true;
+     }
+ 
+     virtual void SetPowerSaveLevel(PowerSaveLevel level) override {
+-        if (level != PowerSaveLevel::LOW_POWER) {
+-            power_save_timer_->WakeUp();
+-        }
+-        WifiBoard::SetPowerSaveLevel(level);
++        // Never enable modem/light sleep on this always-on board. Keeping the
++        // radio awake also makes wake-word sessions and reconnects predictable.
++        WifiBoard::SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+     }
+ };
+ 
+diff --git a/main/idf_component.yml b/main/idf_component.yml
+index 2473f56..17d0797 100644
+--- a/main/idf_component.yml
++++ b/main/idf_component.yml
+@@ -26,11 +26,12 @@ dependencies:
+   espressif/esp_audio_codec: ~2.5.0
+   78/esp-ml307: ~3.7.3
+   78/uart-uhci:
+-    version: ^0.3.3
++    version: ^0.4.0
++    override_path: /opt/xiaozhi-esp32/local_components/uart-uhci
+     rules:
+     - if: target not in [esp32]
+   78/uart-eth-modem:
+-    version: ~0.6.5
++    version: ^0.7.0
+     rules:
+     - if: target not in [esp32]
+   78/xiaozhi-fonts: ~2.0.0
+diff --git a/main/protocols/protocol.cc b/main/protocols/protocol.cc
+index ac591b5..7d562a2 100644
+--- a/main/protocols/protocol.cc
++++ b/main/protocols/protocol.cc
+@@ -105,6 +105,19 @@ void Protocol::SendMcpMessage(const std::string& payload) {
+     SendText(message);
+ }
+ 
++void Protocol::SendPlaybackDrained() {
++    std::string message = "{\"session_id\":\"" + session_id_ +
++                          "\",\"type\":\"device\",\"event\":\"playback_drained\"}";
++    SendText(message);
++}
++
++void Protocol::SendDeviceState(const std::string& state) {
++    std::string message = "{\"session_id\":\"" + session_id_ +
++                          "\",\"type\":\"device\",\"event\":\"state\",\"state\":\"" +
++                          state + "\"}";
++    SendText(message);
++}
++
+ bool Protocol::IsTimeout() const {
+     const int kTimeoutSeconds = 120;
+     auto now = std::chrono::steady_clock::now();
+diff --git a/main/protocols/protocol.h b/main/protocols/protocol.h
+index cfa0dd2..099abbd 100644
+--- a/main/protocols/protocol.h
++++ b/main/protocols/protocol.h
+@@ -66,6 +66,8 @@ public:
+     virtual void SendStopListening();
+     virtual void SendAbortSpeaking(AbortReason reason);
+     virtual void SendMcpMessage(const std::string& message);
++    virtual void SendPlaybackDrained();
++    virtual void SendDeviceState(const std::string& state);
+ 
+ protected:
+     std::function<void(const cJSON* root)> on_incoming_json_;
+diff --git a/scripts/build.py b/scripts/build.py
+index b0fcd1b..1dd2c87 100755
+--- a/scripts/build.py
++++ b/scripts/build.py
+@@ -361,12 +361,30 @@ def _wake_word_sdkconfig_options(
+         options.append("CONFIG_WAKE_WORD_DISABLED=y")
+         return normalized, options, ["CONFIG_WAKE_WORD_DISABLED"]
+ 
++    if normalized == "hey_jarvis":
++        if target not in _AFE_WAKE_WORD_TARGETS:
++            raise ValueError(
++                f"Custom MultiNet wake words are not supported for target {target}"
++            )
++        options.extend([
++            "CONFIG_USE_CUSTOM_WAKE_WORD=y",
++            'CONFIG_CUSTOM_WAKE_WORD="HEY JARVIS"',
++            'CONFIG_CUSTOM_WAKE_WORD_DISPLAY="Hey Jarvis"',
++            "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=30",
++            "CONFIG_SR_MN_EN_NONE=n",
++            "CONFIG_SR_MN_EN_MULTINET7_QUANT=y",
++        ])
++        return normalized, options, [
++            "CONFIG_USE_CUSTOM_WAKE_WORD",
++            "CONFIG_SR_MN_EN_MULTINET7_QUANT",
++        ]
++
+     if target not in _ESP_WAKE_WORD_TARGETS | _AFE_WAKE_WORD_TARGETS:
+         raise ValueError(f"Wake-word selection is not supported for target {target}")
+     if not _WAKE_WORD_MODEL_PATTERN.fullmatch(normalized):
+         raise ValueError(
+             f"Invalid wake word {wake_word!r}. Use 'disabled', "
+-            "'nihaoxiaozhi', or an ESP-SR model name such as "
++            "'hey_jarvis', 'nihaoxiaozhi', or an ESP-SR model name such as "
+             "'wn9_jarvis_tts'."
+         )
+     if target in _LITE_WAKE_WORD_TARGETS and not normalized.startswith("wn9s_"):
