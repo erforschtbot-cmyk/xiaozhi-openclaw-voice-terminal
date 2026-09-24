@@ -49,3 +49,52 @@ systemctl --user restart openclaw-gateway.service
 Danach muss der Werkzeugtest aus `04-TESTPLAN.md` real ausgeführt werden. Eine
 erfolgreiche Syntaxprüfung allein beweist die Funktion nicht.
 
+## Vertrauenswürdige Skill-Aktionen ohne zweite Rückfrage
+
+Die normale OpenClaw-Voice-Sperre bleibt aktiv. Nur Aufrufe des lokal
+installierten Wrappers werden vorautorisiert:
+
+```text
+$HOME/.local/bin/openclaw-voice-skill-action
+```
+
+Der Core-Patch akzeptiert ausschließlich komplette `exec`-Befehle in diesen
+Formen:
+
+```text
+openclaw-voice-skill-action wow-server-start
+openclaw-voice-skill-action wow-server-stop
+openclaw-voice-skill-action alexa-smart-home <URL-kodierter-Text>
+openclaw-voice-skill-action azeroth-gm-safe <URL-kodierter-GM-Befehl>
+```
+
+Die Freigabe gilt nur für `agentId=voice`, das lokale `exec`-Werkzeug und eine
+vollständige Übereinstimmung. Zusätzliche Shell-Operatoren, unbekannte Aktionen,
+direkte `systemctl`-/`curl`-Befehle sowie andere Werkzeuge fallen weiterhin in
+die normale Ja/Nein-Bestätigung.
+
+Der Wrapper validiert die zweite Grenze selbst. `azeroth-gm-safe` akzeptiert nur
+positive `additem`-Aufrufe, Teleport, Recall und `saveall`. Negative Itemzahlen,
+Leveländerungen, Kick, Restart/Shutdown und Datenbankoperationen werden dort
+blockiert.
+
+Installation und Patch:
+
+```bash
+install -Dm0755 scripts/openclaw-voice-skill-action \
+  "$HOME/.local/bin/openclaw-voice-skill-action"
+./scripts/apply-openclaw-voice-skill-policy.py
+./scripts/verify-openclaw-voice-skill-policy.py
+systemctl --user restart openclaw-gateway.service
+```
+
+Nach jedem OpenClaw-Update müssen **beide** Patches erneut angewendet und
+verifiziert werden:
+
+```bash
+./scripts/apply-openclaw-german-confirmation.py
+./scripts/apply-openclaw-voice-skill-policy.py
+./scripts/verify-openclaw-german-confirmation.py
+./scripts/verify-openclaw-voice-skill-policy.py
+systemctl --user restart openclaw-gateway.service
+```

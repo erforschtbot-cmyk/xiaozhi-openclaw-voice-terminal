@@ -37,10 +37,23 @@ Sprich eine Anfrage, die eine Websuche verlangt.
 Erwartet: Tool-Aufruf im OpenClaw-Gateway-Journal und anschließend gesprochene
 inhaltliche Antwort.
 
-## E. Veränderndes Werkzeug mit deutscher Bestätigung
+## E. Vorautorisierte Skill-Aktion ohne zweite Bestätigung
 
 1. Zielzustand vorher prüfen.
 2. Sprich: **„Jarvis, schalte den WoW-Server an.“**
+3. Der registrierte Wrapper muss unmittelbar ausgeführt werden.
+
+Bestanden nur, wenn keine Ja/Nein-Rückfrage gesprochen wird, die Wrapper-Ausgabe
+`OK wow-server-start ...` erscheint und beide Dienste tatsächlich aktiv sind.
+
+Smart-Home-Test: **„Jarvis, schalte das Licht im Arbeitszimmer an.“** Der Aufruf
+muss über `openclaw-voice-skill-action alexa-smart-home ...` laufen, HTTP 200
+liefern und darf keine zweite Bestätigung verlangen.
+
+## F. Nicht registrierte Veränderung bleibt bestätigt
+
+1. Zielzustand vorher prüfen.
+2. Fordere eine harmlose, aber nicht registrierte verändernde Testaktion an.
 3. Warte auf die Bestätigungsfrage.
 4. Sprich: **„Ja, mache das.“**
 
@@ -51,17 +64,17 @@ Bestanden nur, wenn alle vier Beweise vorliegen:
 - Jarvis spricht das endgültige Ergebnis;
 - realer Zielzustand ist korrekt (Authserver und Worldserver `active/running`).
 
-Am 24.09.2026 wurde genau dieser Ablauf vollständig bestätigt.
+Direkte `systemctl`-/`curl`-Aufrufe, unbekannte Wrapper-Aktionen und Befehle mit
+`&&`, `;`, Pipes oder Umleitungen dürfen den vorautorisierten Pfad nicht treffen.
 
-## F. Ablehnung
+## G. Ablehnung
 
 Eine testweise ausstehende Aktion mit **„Nein“** beantworten. Die Aktion darf nicht
 ausgeführt werden und muss danach verworfen sein.
 
-## G. 24/7 und Reconnect
+## H. 24/7 und Reconnect
 
 - länger als fünf Minuten warten: kein PMIC-Off/Standby;
 - WLAN kurz unterbrechen: Gerät muss gespeicherte Netze selbstständig erneut
   verbinden;
 - Wakeword danach erneut testen.
-

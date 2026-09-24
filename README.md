@@ -9,6 +9,7 @@ um das funktionierende Jarvis-System auf einem leeren Linux-/OpenClaw-Host wiede
 - Mikrofon und unmittelbare GPT-Live-Sprachausgabe
 - OpenClaw-Voice-Agent mit Werkzeugen
 - mehrteilige Werkzeugbestätigung: Auftrag → Rückfrage → deutsches „Ja“ → Ausführung
+- eng vorautorisierte lokale Skill-Aktionen ohne redundante zweite Rückfrage
 - direkte Geräte-MCP-Befehle für Lautstärke und Displayhelligkeit
 - Folgefragen ohne neues Wakeword
 - Displayzustände Bereitschaft / Zuhören / Sprechen
@@ -42,12 +43,13 @@ dem OpenClaw-Host.
 4. [`docs/04-TESTPLAN.md`](docs/04-TESTPLAN.md)
 5. [`docs/05-FEHLERSUCHE.md`](docs/05-FEHLERSUCHE.md)
 6. [`docs/06-BUILD-VERIFICATION.md`](docs/06-BUILD-VERIFICATION.md)
+7. [`docs/07-VOICE-SKILL-POLICY.md`](docs/07-VOICE-SKILL-POLICY.md)
 
 Für einen bereits eingerichteten Host genügt typischerweise:
 
 ```bash
 ./scripts/install-host.sh --public-host 192.168.178.143
-./scripts/apply-openclaw-german-confirmation.py
+./scripts/install-voice-policy.sh
 ./scripts/verify-host.sh
 ```
 

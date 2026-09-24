@@ -22,10 +22,12 @@ for command_name in python3 node npm openclaw systemctl; do
 done
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-mkdir -p "$install_dir" "$HOME/.config/systemd/user"
+mkdir -p "$install_dir" "$HOME/.config/systemd/user" "$HOME/.local/bin"
 install -m 0644 "$repo_dir/gateway/server.py" "$install_dir/server.py"
 install -m 0755 "$repo_dir/gateway/openclaw-talk-realtime.mjs" "$install_dir/openclaw-talk-realtime.mjs"
 install -m 0644 "$repo_dir/gateway/requirements.txt" "$install_dir/requirements.txt"
+install -m 0755 "$repo_dir/scripts/openclaw-voice-skill-action" "$HOME/.local/bin/openclaw-voice-skill-action"
+"$HOME/.local/bin/openclaw-voice-skill-action" --self-test
 
 python3 -m venv "$install_dir/.venv"
 "$install_dir/.venv/bin/python" -m pip install --upgrade pip
@@ -45,4 +47,3 @@ systemctl --user daemon-reload
 systemctl --user enable --now xiaozhi-openclaw-gateway.service
 systemctl --user is-active --quiet xiaozhi-openclaw-gateway.service
 echo "Installed and active: xiaozhi-openclaw-gateway.service"
-
