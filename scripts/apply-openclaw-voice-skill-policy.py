@@ -13,13 +13,13 @@ function isPreauthorizedVoiceSkillAction(params) {
 	if (params.agentId !== "voice" || params.toolName.trim().toLowerCase() !== "exec") return false;
 	if (!params.toolParams || typeof params.toolParams !== "object" || Array.isArray(params.toolParams)) return false;
 	const keys = Object.keys(params.toolParams);
-	if (keys.some((key) => !["command", "timeout", "yieldMs", "yield_time-ms", "maxOutputChars"].includes(key))) return false;
+	if (keys.some((key) => !["command", "title", "timeout", "yieldMs", "yield_time-ms", "maxOutputChars"].includes(key))) return false;
 	const command = params.toolParams.command;
 	if (typeof command !== "string") return false;
 	const wrapper = path.join(os.homedir(), ".local", "bin", "openclaw-voice-skill-action");
 	const escaped = wrapper.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 	const payload = "[A-Za-z0-9._~%+-]+";
-	return new RegExp(`^${escaped} (?:wow-server-(?:start|stop)|(?:alexa-smart-home|azeroth-gm-safe) ${payload})$`).test(command);
+	return new RegExp(`^${escaped} (?:wow-server-(?:start|stop)|(?:alexa-smart-home|azeroth-gm-safe) (?:${payload}|"${payload}"))$`).test(command);
 }
 '''
 

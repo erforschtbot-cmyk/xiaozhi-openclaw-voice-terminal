@@ -233,18 +233,20 @@ class XiaozhiSession:
     @staticmethod
     def is_interim_text(text):
         normalized = " ".join(text.strip().lower().replace("’", "'").split())
-        return normalized.startswith((
-            "i'll",
+        normalized = normalized.rstrip(".!?")
+        return normalized in {
+            "i'll check that request",
             "i'll check",
+            "i will check that request",
             "i will check",
             "let me check",
             "one moment",
             "einen moment",
             "augenblick",
-            "moment, ich",
-            "ich prüfe",
-            "ich schaue",
-        ))
+            "moment, ich prüfe das",
+            "ich prüfe das kurz",
+            "ich schaue kurz nach",
+        }
 
     def cancel_session_finish(self):
         current_task = asyncio.current_task()

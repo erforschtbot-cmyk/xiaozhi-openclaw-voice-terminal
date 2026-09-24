@@ -20,6 +20,8 @@ for path in files:
     assert 'params.toolName.trim().toLowerCase() !== "exec"' in text
     assert "wow-server-(?:start|stop)" in text
     assert "alexa-smart-home|azeroth-gm-safe" in text
+    assert '"command", "title", "timeout"' in text
+    assert '(?:${payload}|"${payload}")' in text
 assert matching, "No OpenClaw voice confirmation bundle found"
 
 wrapper = pathlib.Path.home() / ".local" / "bin" / "openclaw-voice-skill-action"
@@ -30,12 +32,13 @@ subprocess.run([str(wrapper), "--self-test"], check=True)
 payload = r"[A-Za-z0-9._~%+-]+"
 pattern = re.compile(
     rf"^{re.escape(str(wrapper))} "
-    rf"(?:wow-server-(?:start|stop)|(?:alexa-smart-home|azeroth-gm-safe) {payload})$"
+    rf'(?:wow-server-(?:start|stop)|(?:alexa-smart-home|azeroth-gm-safe) (?:{payload}|"{payload}"))$'
 )
 accepted = [
     f"{wrapper} wow-server-start",
     f"{wrapper} wow-server-stop",
     f"{wrapper} alexa-smart-home Licht%20an",
+    f'{wrapper} alexa-smart-home "Licht%20an"',
     f"{wrapper} azeroth-gm-safe tele%20name%20Priestilia%20Dalaran",
 ]
 rejected = [
