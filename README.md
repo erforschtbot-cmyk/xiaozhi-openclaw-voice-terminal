@@ -77,22 +77,28 @@ Aus dem Boot-Log und dem App-Deskriptor des Geräts gelesen:
 |---|---|
 | Project | `xiaozhi` |
 | Version | `2.5.0` |
-| Compile time | **Sep 23 2026 08:43:24** |
-| ELF-SHA256 | `b6bf3e74cef7c701…` |
+| Compile time | **Sep 26 2026 19:10:55** |
+| ELF-SHA256 | `2d817b23a349060d…` |
 | ESP-IDF | `v6.1-803-g94639ab7251` |
 | Board | `esp32-s3-touch-lcd-4b` |
 
-Verwechslungsgefahr: Es existiert ein weiterer `xiaozhi 2.5.0`-Build vom
-**22.09. 15:25** (ELF `dc80cd8c…`). Das ist **nicht** der laufende Stand.
+Dieser Stand enthält den **Wiederherstellungs-Watchdog** (siehe
+`docs/02-FIRMWARE.md`).
+
+Verwechslungsgefahr: Es existieren weitere `xiaozhi 2.5.0`-Builds, u. a. der
+vorherige bewährte Stand **23.09. 08:43** (ELF `b6bf3e74…`) und ein weiterer vom
+**22.09. 15:25** (ELF `dc80cd8c…`). Weder Version noch Projektname unterscheiden
+sie — nur Compile-Zeit und ELF-Hash.
 
 ## Wiederherstellungsanker
 
-`firmware/prebuilt/` enthält zwei Dateien, die den laufenden Stand exakt abbilden:
+`firmware/prebuilt/` enthält den aktuellen Stand:
 
 | Datei | Inhalt | Schreibziel |
 |---|---|---|
-| `xiaozhi.bin` | Nur App-Partition (`ota_0`), byte-identisch zur laufenden App | `0x20000` |
-| `merged-binary.bin` | Vollständiges 16-MiB-Image, **NVS auf 0xFF geleert** | `0x0` (nur Rettungsfall) |
+| `xiaozhi.bin` | Nur App-Partition (`ota_0`) des laufenden Watchdog-Builds | `0x20000` |
+| `merged-binary.bin` | Vollständiges Image, **NVS auf `0xFF` geleert** | `0x0` (nur Rettungsfall) |
+| `previous-no-watchdog/xiaozhi.bin` | Vorheriger bewährter Stand (`b6bf3e74…`), ohne Watchdog | `0x20000` |
 
 Das NVS im Vollimage wurde bewusst geleert: Es enthält WLAN-Zugangsdaten im
 Klartext. Ein geflashtes Gerät muss danach neu provisoniert werden.

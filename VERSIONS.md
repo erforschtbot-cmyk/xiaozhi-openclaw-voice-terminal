@@ -23,12 +23,15 @@ Diese Werte sind der **Ist-Stand vom 2026-09-26** auf dem Referenzhost.
 |---|---|
 | Project | `xiaozhi` |
 | Version | `2.5.0` |
-| Compile time | `Sep 23 2026 08:43:24` |
-| ELF-SHA256 (Präfix) | `b6bf3e74cef7c701` |
+| Compile time | `Sep 26 2026 19:10:55` (mit Watchdog) |
+| ELF-SHA256 (Präfix) | `2d817b23a349060d` |
 | ESP-IDF | `v6.1-803-g94639ab7251` |
 | Geräte-MAC | `94:a9:90:cc:8d:b4` |
 
-**Nicht verwechseln:** Es gibt einen weiteren `xiaozhi 2.5.0`-Build vom
+Rückweg ohne Watchdog: `Sep 23 2026 08:43:24`, ELF `b6bf3e74cef7c701`
+(`firmware/prebuilt/previous-no-watchdog/xiaozhi.bin`).
+
+**Nicht verwechseln:** Es gibt weitere `xiaozhi 2.5.0`-Builds, u. a. vom
 `Sep 22 2026 15:25:48` (ELF `dc80cd8c5e42d81b`). Version und Projektname sind
 identisch — nur Compile time und ELF-Hash unterscheiden die Builds.
 
