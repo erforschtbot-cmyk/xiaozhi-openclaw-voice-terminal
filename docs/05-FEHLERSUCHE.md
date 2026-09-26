@@ -73,6 +73,29 @@ Weitere Punkte, die im Gesprächspfad gelten:
 - WebSocket-Close braucht `close_timeout=1`; das Board liefert nicht immer einen
   Close-Frame.
 
+### Ursache: Zwischenansage und Antwort in einer Nachricht
+
+Symptom: Im **Werkzeugfall** geht „Sprechen“ nicht weg, obwohl Jarvis gesprochen
+hat. Im Bridge-Log fehlt `Audio stream complete` (also `stream_end`).
+
+```text
+assistant_done  text=" I'll check that request. Es ist 01:02 Uhr."
+(kein "Audio stream complete")
+```
+
+Ursache: `is_interim_text()` in `gateway/server.py` prüfte nur ein **Präfix**
+(`startswith`). Wachsen Zwischenansage und Antwort zu **einer** Nachricht zusammen,
+gilt die ganze Zeile als Zwischenansage — `schedule_stream_end()` wird
+übersprungen und das Gerät bleibt im Zustand „Sprechen“.
+
+Gegenmaßnahme: `is_interim_text()` vergleicht jetzt gegen eine **geschlossene
+Liste** reiner Zwischenansagen (nach Trimmen von Satzzeichen). Eine
+zusammengewachsene Nachricht ist damit **nicht** interim und bekommt `stream_end`.
+
+Gegenprobe im Log: Bei getrennten Nachrichten war es unauffällig, weil die
+Zwischenansage (`„Einen Moment, ich prüfe das.“`) und die Antwort (`„Es ist 01:02
+Uhr.“`) als **zwei** `assistant_done`-Events ankamen.
+
 ## Gerät verbindet nach jeder Antwort neu
 
 ```text

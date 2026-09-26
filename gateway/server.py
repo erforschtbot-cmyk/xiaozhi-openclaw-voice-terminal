@@ -165,13 +165,13 @@ class XiaozhiSession:
 
         env = os.environ.copy()
         env.update(
-            # Every utterance gets a fresh realtime provider transcript. The
-            # consulted agent remains shared only inside this one WebSocket
-            # conversation so sequential follow-ups retain context without two
-            # providers ever writing the same transcript concurrently.
-            OPENCLAW_TALK_SESSION_KEY=f"{self.args.session_key}-{self.turn_id}",
+            # TEST (2026-09-27, dauerhafte Instanz): Der Session-Key ist bewusst
+            # KONSTANT. Alle Utterances/Verbindungen landen in derselben Session,
+            # damit ein zweites "Jarvis" in derselben Instanz weiterläuft.
+            # Zum Zurücksetzen: die beiden f-Strings wieder mit -{uuid} anhängen.
+            OPENCLAW_TALK_SESSION_KEY=self.args.session_key,
             OPENCLAW_TALK_CONSULT_SESSION_KEY=(
-                f"{self.args.consult_session_key}-{self.session_id}"
+                self.args.consult_session_key
                 if self.args.consult_session_key
                 else ""
             ),
@@ -232,19 +232,38 @@ class XiaozhiSession:
 
     @staticmethod
     def is_interim_text(text):
+        # Nur eine REINE Zwischenansage darf den stream_end unterdruecken.
+        # Vorher reichte ein Praefix ("startswith"), dadurch galt auch
+        # "I'll check that request. Es ist 01:02 Uhr." als Zwischenansage —
+        # das Gerät bekam nie stream_end und blieb im Sprechen-Zustand.
         normalized = " ".join(text.strip().lower().replace("’", "'").split())
-        return normalized.startswith((
-            "i'll",
+        normalized = normalized.strip(" .,!?;:…-–—")
+        return normalized in {
             "i'll check",
+            "i'll check that",
+            "i'll check that request",
             "i will check",
+            "i will check that request",
             "let me check",
+            "let me check that",
+            "let me check that for you",
+            "let me check that for you please",
             "one moment",
+            "one moment please",
             "einen moment",
+            "einen moment bitte",
+            "einen moment, ich prüfe das",
+            "einen moment ich prüfe das",
             "augenblick",
-            "moment, ich",
-            "ich prüfe",
+            "augenblick bitte",
+            "moment, ich prüfe das",
+            "moment ich prüfe das",
+            "ich prüfe das",
+            "ich prüfe das kurz",
             "ich schaue",
-        ))
+            "ich schaue nach",
+            "ich schaue kurz nach",
+        }
 
     def cancel_session_finish(self):
         current_task = asyncio.current_task()

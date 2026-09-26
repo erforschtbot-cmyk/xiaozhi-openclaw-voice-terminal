@@ -84,7 +84,7 @@ byte-genau verifiziert:
 
 | Datei | SHA-256 |
 |---|---|
-| `gateway/server.py` | `bf1bb17b03a1f5eeb5ec097240409d1c8b67574f4bede1ac106f914e04febbe3` |
+| `gateway/server.py` | `fe11766cb233d2d3687f548512abb77b095924088ba53f1603fe459c1ef3893e` |
 | `gateway/openclaw-talk-realtime.mjs` | `430aa9205b5f275552c14e27aefbaa4f58990df892071bd173c3e9c55e1145c6` |
 
 ## OpenClaw-`dist`-Patches
