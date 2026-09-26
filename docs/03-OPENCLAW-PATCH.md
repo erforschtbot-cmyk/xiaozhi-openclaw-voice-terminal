@@ -15,26 +15,58 @@ Ja/Nein absichern. Der Owner hat das ausdrücklich abgeschaltet. Der Patch setzt
 Funktion früh auf `{ allowed: true }` — **ohne** Text-, Befehls-, Satzzeichen- oder
 Wortfilter.
 
-## Patch B — Assistant-Transkript wird nicht persistiert
+## Patch B — User- und Assistant-Text getrennt, je einmal pro Turn
 
 Datei: `dist/handlers-*.mjs`
-Ort: `onTranscript` im Realtime-Relay
-Marker: `voice-test-suppress-assistant-persist-v1`
+Ort: `onTranscript`, `handleDelegationInput`, `onToolCall`, Forced-Consult
+Marker: `voice-persist-split-v3`
 
-Das Provider-/Assistant-Transkript (gesprochene KI-Antwort und die Zwischenansage)
-wird **nicht** in die Voice-Session geschrieben. Das User-Transkript bleibt erhalten.
+Beide Seiten werden gespeichert, aber **getrennt** und **genau einmal pro Turn**:
 
-Grund: Zwischenansage und Agenten-Consult schreiben sonst in dasselbe SQLite-Transkript.
-Bei einem frischen Turn (erster Werkzeug-Consult nach einer Pause) kollidieren beide
-Schreiber und der Turn wird verworfen:
+| Fall | User-Text | Assistant-Antwort |
+|---|---|---|
+| **ohne Tool** | Relay (1×) | Relay (1×) |
+| **mit Tool** | einmal | nur der Consult |
+
+Verworfen wird ausschließlich die **Zwischenansage** („I'll check that request"),
+weil sie der zweite Schreiber auf demselben Transkript war.
+
+### Warum das nötig ist
+
+Zwei getrennte Fehlerbilder, beide aus derselben Ursache:
+
+1. **SQLite-Konflikt.** Zwischenansage (Voice-Pfad) und Consult schreiben in
+dasselbe Transkript. Auf einem frischen Turn kollidieren beide Schreiber:
 
 ```text
 SqliteTranscriptMutationConflictError:
 SQLite transcript changed while preparing rewrite for <sessionId>
 ```
 
-Sichtbare Folge ohne Patch: „Es hat leider nicht geklappt … soll ich es nochmal?" —
-obwohl die Werkzeugantwort inhaltlich bereits erzeugt wurde.
+Sichtbare Folge: „Es hat leider nicht geklappt … soll ich es nochmal?" — obwohl die
+Werkzeugantwort inhaltlich bereits erzeugt wurde. Im Transkript war die Sprache des
+Nutzers in Tool-Turns **zweimal** als `role=user` abgelegt: einmal vom Voice-Relay,
+einmal im Consult-Prompt.
+
+2. **Doppelte Antwort.** Mit Werkzeug schreibt der Consult die Antwort **und** der
+Voice-Relay dieselbe Antwort nochmal (`prov=None` und `prov=realtime_voice`,
+identischer Text). Der Merker `assistantOwnedByConsult` verhindert das.
+
+### Umsetzung
+
+Fünf Teile in derselben Datei:
+
+| Teil | Ort | Wirkung |
+|---|---|---|
+| Relay-Feld | Relay-Objekt | `assistantOwnedByConsult: false` |
+| provider-direct-Haken | `handleDelegationInput` | Merker setzen, wenn echtes Consult (`outcome !== "control"`) |
+| Tool-Call-Haken | `onToolCall` | Merker bei `openclaw_agent_consult` |
+| Forced-Consult-Haken | `scheduleForcedAgentConsult` | Merker im erzwungenen Pfad |
+| Transkript-Gate | `onTranscript` | Zwischenansage verwerfen; Assistant überspringen, wenn Merker gesetzt oder ein Agent-Run aktiv ist; Merker bei neuer User-Frage zurücksetzen |
+
+**Wichtig:** `consultRouting` steht auf `provider-direct`. Der Consult kommt dort
+**nicht** als `openclaw_agent_consult`-Tool-Call an — deshalb wirkt der
+`handleDelegationInput`-Haken, nicht nur der Tool-Call-Haken.
 
 ## Anwenden und verifizieren
 

@@ -26,12 +26,14 @@ durch. Eine reine Plauderfrage („erzähle einen Witz") löst es nicht aus, wei
 keinen Consult braucht — sie etabliert die Session aber, so dass der nächste
 Werkzeugaufruf nicht mehr „der erste" ist.
 
-Ursache: Die Zwischenansage des Providers und der Agenten-Consult schreiben in
-dasselbe SQLite-Transkript; auf einem frischen Transkript kollidieren beide
-Schreiber und der Consult wird vor dem Werkzeugaufruf verworfen.
+Ursache: Die Sprache des Nutzers und der Agenten-Consult schreiben in dasselbe
+SQLite-Transkript. In Werkzeug-Turns liegt die Sprache **zweimal** als
+`role=user` vor — einmal vom Voice-Relay, einmal im Consult-Prompt. Auf einem
+frischen Transkript kollidieren beide Schreiber und der Consult wird vor dem
+Werkzeugaufruf verworfen.
 
 **Gegenmaßnahme:** Patch B aus `docs/03-OPENCLAW-PATCH.md` anwenden
-(Assistant-Transkript nicht persistieren). Danach Gateway neu starten.
+(`voice-persist-split-v3`). Danach Gateway neu starten.
 
 Die Session ist dabei **nicht** beschädigt — der Turn wird atomar verworfen.
 
