@@ -60,6 +60,8 @@ Die Firmware-Patches enthalten:
 - eindeutiges physisches Wiedergabeende (`playback_drained`);
 - Gerätezustände über das XiaoZhi-Protokoll;
 - `stream_end`, damit „Sprechen" erst nach geleertem Lautsprecher endet;
+- **Wiederherstellungs-Watchdog**, der hängende Gesprächszustände selbstständig
+  nach Bereitschaft zurückführt (siehe `docs/02-FIRMWARE.md`);
 - IDF-6.1-Kompatibilität für `uart-uhci`;
 - lokales OTA-/WebSocket-Ziel.
 
@@ -69,15 +71,44 @@ Diese Werte sind aus dem gepinnten Quellbaum gelesen und erklären Hängeverhalt
 
 | Timer/Wert | Ort | Bedeutung |
 |---|---|---|
-| `kTimeoutSeconds = 120` | `main/protocols/protocol.cc` | Kanal gilt als tot, wenn 120 s nichts eingeht. Wird **nicht** periodisch geprüft. |
+| `kTimeoutSeconds = 120` | `main/protocols/protocol.cc` | Kanal gilt als tot, wenn 120 s nichts eingeht |
 | Server-Hello 10 s | `main/protocols/websocket_protocol.cc` | Kein Server-Hello binnen 10 s → `SERVER_TIMEOUT` |
-| Clock-Tick 1 s | `main/application.cc` | Aktualisiert nur Statusleiste und Heap-Log |
+| Clock-Tick 1 s | `main/application.cc` | Statusleiste, Heap-Log **und der Wiederherstellungs-Watchdog** |
+| Watchdog speaking 60 s | `HandleStuckWatchdog` | Kein Serveraudio seit 60 s im Zustand „Sprechen“ → Bereitschaft |
+| Watchdog listening 120 s | `HandleStuckWatchdog` | Keine Serveraktivität seit 120 s im Zustand „Zuhören“ → Bereitschaft |
+| Watchdog connecting 15 s | `HandleStuckWatchdog` | Audio-Kanal öffnet nicht binnen 15 s → Bereitschaft |
 
-**Wichtig:** Es gibt **keinen Watchdog und keinen Keepalive** im WebSocket-Pfad, und
-keinen Selbstheilungs-Timer, der aus „Sprechen"/„Zuhören" nach „Bereitschaft"
-zurückschaltet. Die Rückkehr nach Idle passiert ausschließlich reaktiv — durch
-Socket-Abbruch, Fehlerereignis oder Playback-Ende. Deshalb hilft bei einem Hänger
-der Neustart der Bridge (erzwingt den Abbruch), nicht ein Warten.
+Der Upstream hat **keinen** Watchdog und keinen Keepalive. Ohne den Patch bleibt ein
+hängender Zustand stehen, bis ein Socket-Abbruch von außen kommt. Mit dem Patch
+kehrt das Gerät selbstständig nach Bereitschaft zurück.
+
+### Wie der Watchdog arbeitet
+
+`Protocol` merkt sich bei **jedem** eingehenden Paket (JSON *und* Audio) einen
+Zeitstempel. Der Watchdog läuft im vorhandenen 1-Sekunden-Takt und wertet diesen
+Zeitstempel aus:
+
+- **Zustand „Sprechen“:** Antwortet der Server 60 s nicht, wird das Sprechen
+  abgebrochen (`AbortSpeaking`) und der Kanal geschlossen → Bereitschaft.
+- **Zustand „Zuhören“:** Seit 120 s keine Serveraktivität → Kanal schließen →
+  Bereitschaft. Ein laufender Werkzeug-Consult streamt zwar nichts, hält die
+  Verbindung aber offen; 120 s sind bewusst großzügig gewählt.
+- **Zustand „Verbinden“:** Öffnet der Audio-Kanal nicht binnen 15 s → Bereitschaft.
+
+Nicht angefasst werden `idle`, `wifi_configuring`, `activating`, `upgrading`,
+`notifying` und `fatal_error`. Der Watchdog kann also keine Provisionierung oder
+Oberflächen stören.
+
+Jeder Eingriff wird geloggt:
+
+```text
+W (...) Application: Stuck watchdog: state=speaking in_state=61s idle=60s (no server audio while speaking) -> idle
+```
+
+**Schwellen anpassen:** Die Werte stehen als `constexpr` in
+`Application::HandleStuckWatchdog` (`kSpeakingIdleTimeoutS`,
+`kListeningIdleTimeoutS`, `kConnectingTimeoutS`). Nach jeder Anpassung den
+vollständigen Testplan durchlaufen.
 
 ## Warum das Prebuilt-Image erhalten bleibt
 

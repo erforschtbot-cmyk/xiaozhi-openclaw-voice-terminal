@@ -41,15 +41,37 @@ Audio-Turn und Talk-Session dürfen nicht blind gekoppelt werden. Der bestätigt
 Stand hält bei einer Werkzeug-Rückfrage dieselbe Talk-Session offen und öffnet nach
 physischem `playback_drained` den Eingang erneut. Keine Timer auf Verdacht ändern.
 
-## „Sprechen" bleibt hängen
+## „Sprechen" oder „Zuhören" bleibt hängen
+
+Seit dem Watchdog-Patch (siehe `docs/02-FIRMWARE.md`) löst die Firmware das selbst:
+
+- kein Serveraudio seit 60 s im Zustand „Sprechen“ → Bereitschaft;
+- keine Serveraktivität seit 120 s im Zustand „Zuhören“ → Bereitschaft;
+- Audio-Kanal öffnet nicht binnen 15 s → Bereitschaft.
+
+Logbeleg:
+
+```text
+W (...) Application: Stuck watchdog: state=speaking in_state=61s idle=60s (...) -> idle
+```
+
+Wenn es **trotzdem** hängt:
+
+1. Prüfen, ob die installierte Firmware den Watchdog enthält (die App-Version ist
+   dabei nicht aussagekräftig — nur Compile-Zeit und ELF-Hash, siehe
+   `scripts/read-device-info.py`).
+2. Prüfen, ob der Zustand von einer **nicht** überwachten Phase stammt
+   (`wifi_configuring`, `activating`, `upgrading`) — diese schützt der Watchdog
+   bewusst nicht.
+3. Als Sofortmaßnahme `systemctl --user restart jarvis-realtime-bridge.service`
+   — der erzwungene Socket-Abbruch bringt das Gerät nach Idle.
+
+Weitere Punkte, die im Gesprächspfad gelten:
 
 - `stream_end` muss an das Gerät gesendet werden.
 - Das Gerät meldet nach geleertem Puffer `playback_drained`.
 - WebSocket-Close braucht `close_timeout=1`; das Board liefert nicht immer einen
   Close-Frame.
-- Die Firmware hat **keinen** Selbstheilungs-Timer. Wenn nichts mehr geht:
-  `systemctl --user restart jarvis-realtime-bridge.service` erzwingt den
-  Socket-Abbruch, und der Abbruch ist das Ereignis, das das Gerät nach Idle bringt.
 
 ## Gerät verbindet nach jeder Antwort neu
 

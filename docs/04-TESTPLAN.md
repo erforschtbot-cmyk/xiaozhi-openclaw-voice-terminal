@@ -82,10 +82,30 @@ Erwartet: `Follow-up window expired; returning to standby` und ein neuer
   verbinden;
 - Wakeword danach erneut testen.
 
-## I. Hänger-Auflösung
+## J. Wiederherstellungs-Watchdog
 
-Wiederhole den Ablauf so lange, bis das Gerät sichtbar hängt (falls reproduzierbar).
-Dann:
+Prüft, dass das Gerät aus einem hängenden Gesprächszustand selbstständig nach
+Bereitschaft zurückkehrt — ohne Neustart der Bridge.
+
+1. Eine Werkzeugfrage stellen und den Ablauf so weit es geht ausbremsen (z. B. eine
+   Anfrage, die serverseitig lange braucht), bis das Display in „Sprechen“ oder
+   „Zuhören“ stehen bleibt.
+2. Warten, ohne etwas anzufassen (max. 120 s).
+3. Im seriellen Log oder im Bridge-Journal muss erscheinen:
+
+```text
+Stuck watchdog: state=speaking in_state=61s idle=60s (no server audio while speaking) -> idle
+```
+
+4. Danach muss das Gerät **ohne Fremdeingriff** wieder in Bereitschaft sein und auf
+   „Jarvis“ reagieren.
+
+Bestanden nur, wenn kein Bridge-Neustart nötig war. Zum Vergleich ohne Watchdog:
+Der Zustand bleibt stehen, bis der Socket von außen abgebrochen wird.
+
+## K. Hänger-Auflösung (Gegenprobe)
+
+Wiederhole den Ablauf, wenn der Watchdog bewusst umgangen werden soll. Dann:
 
 ```bash
 systemctl --user restart jarvis-realtime-bridge.service

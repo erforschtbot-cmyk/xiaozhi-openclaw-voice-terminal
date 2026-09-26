@@ -9,6 +9,7 @@ wiederherzustellen — so, wie es am **2026-09-26** auf dem Referenzhost läuft.
 | Bestandteil | Datei(en) |
 |---|---|
 | Firmware-Patches gegen den gepinnten Upstream | `firmware/patches/` |
+| Wiederherstellungs-Watchdog (im Firmware-Patch) | `firmware/patches/xiaozhi-esp32-openclaw.patch` |
 | Bestätigte Firmware-Images (Wiederherstellungsanker) | `firmware/prebuilt/` |
 | Aufgelöste Abhängigkeiten des Firmware-Builds | `firmware/dependencies.lock` |
 | Bridge-Skript 1 (Python, WebSocket-Server) | `gateway/server.py` |

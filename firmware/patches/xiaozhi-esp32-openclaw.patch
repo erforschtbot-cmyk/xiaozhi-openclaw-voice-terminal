@@ -12,7 +12,7 @@ index d632aea..85a4e1e 100644
      "ota": Path("build/xiaozhi.bin"),
      "full": Path("build/merged-binary.bin"),
 diff --git a/main/application.cc b/main/application.cc
-index 31de205..d775577 100644
+index 31de205..7b109ba 100644
 --- a/main/application.cc
 +++ b/main/application.cc
 @@ -210,11 +210,19 @@ void Application::Run() {
@@ -35,7 +35,100 @@ index 31de205..d775577 100644
              }
              // Deferred listening start (auto mode): the playback queue has
              // drained, so it is now safe to enable voice processing.
-@@ -624,10 +632,24 @@ void Application::InitializeProtocol() {
+@@ -276,6 +284,9 @@ void Application::Run() {
+             auto display = Board::GetInstance().GetDisplay();
+             display->UpdateStatusBar();
+ 
++            // Recovery watchdog: return a stalled conversation to standby.
++            HandleStuckWatchdog();
++
+             // Print debug info every 10 seconds
+             if (clock_ticks_ % 10 == 0) {
+                 SystemInfo::PrintHeapStats();
+@@ -286,6 +297,82 @@ void Application::Run() {
+     }
+ }
+ 
++void Application::HandleStuckWatchdog() {
++    const DeviceState state = GetDeviceState();
++
++    // Reset the per-state counter whenever the state changes.
++    if (state != watchdog_last_state_) {
++        watchdog_last_state_ = state;
++        watchdog_state_seconds_ = 0;
++    } else if (watchdog_state_seconds_ < 1000000) {
++        watchdog_state_seconds_++;
++    }
++
++    watchdog_idle_seconds_ = protocol_ ? protocol_->SecondsSinceLastIncoming() : 0;
++
++    // Only conversation states are guarded. Idle/wifi/activating/upgrading are
++    // never touched, and fatal_error must stay untouched.
++    //
++    // Thresholds are deliberately generous: they must not disturb normal turns,
++    // including tool consults that stream nothing to the device while running.
++    // Tune only with a full test-plan pass afterwards.
++    constexpr int kSpeakingIdleTimeoutS = 60;
++    constexpr int kListeningIdleTimeoutS = 120;
++    constexpr int kConnectingTimeoutS = 15;
++
++    bool stalled = false;
++    const char* reason = "";
++
++    switch (state) {
++        case kDeviceStateSpeaking:
++            // While speaking the server streams audio/TTS events continuously.
++            // A long silence means the answer is dead even though the socket is warm.
++            if (watchdog_idle_seconds_ >= kSpeakingIdleTimeoutS) {
++                stalled = true;
++                reason = "no server audio while speaking";
++            }
++            break;
++        case kDeviceStateListening:
++            // Listening means the device is waiting for the server. Silence for
++            // this long means the turn will never come back.
++            if (watchdog_idle_seconds_ >= kListeningIdleTimeoutS) {
++                stalled = true;
++                reason = "no server activity while listening";
++            }
++            break;
++        case kDeviceStateConnecting:
++            if (watchdog_state_seconds_ >= kConnectingTimeoutS) {
++                stalled = true;
++                reason = "audio channel did not open";
++            }
++            break;
++        default:
++            break;
++    }
++
++    if (!stalled) {
++        return;
++    }
++
++    ESP_LOGW(TAG,
++             "Stuck watchdog: state=%s in_state=%ds idle=%ds (%s) -> idle",
++             DeviceStateMachine::GetStateName(state), watchdog_state_seconds_,
++             watchdog_idle_seconds_, reason);
++
++    if (state == kDeviceStateSpeaking) {
++        AbortSpeaking(kAbortReasonNone);
++    }
++    // Drop deferred work so the wake word path is clean again, then tear the
++    // dead channel down; closing triggers the idle transition as well.
++    tts_stream_end_pending_ = false;
++    pending_listening_start_ = false;
++    if (protocol_) {
++        protocol_->CloseAudioChannel(false);
++    }
++    SetDeviceState(kDeviceStateIdle);
++    watchdog_state_seconds_ = 0;
++}
++
+ void Application::HandleNetworkConnectedEvent() {
+     ESP_LOGI(TAG, "Network connected");
+     auto state = GetDeviceState();
+@@ -624,10 +711,24 @@ void Application::InitializeProtocol() {
              if (strcmp(state->valuestring, "start") == 0) {
                  Schedule([this]() {
                      aborted_ = false;
@@ -61,10 +154,10 @@ index 31de205..d775577 100644
                          if (listening_mode_ == kListeningModeManualStop) {
                              SetDeviceState(kDeviceStateIdle);
 diff --git a/main/application.h b/main/application.h
-index f2b9a00..89e4366 100644
+index f2b9a00..1bc0bb9 100644
 --- a/main/application.h
 +++ b/main/application.h
-@@ -151,6 +151,7 @@ private:
+@@ -151,9 +151,15 @@ private:
      bool assets_version_checked_ = false;
      bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
      bool pending_listening_start_ = false;  // Waiting for playback to drain before starting listening (auto mode)
@@ -72,6 +165,23 @@ index f2b9a00..89e4366 100644
      int clock_ticks_ = 0;
      TaskHandle_t activation_task_handle_ = nullptr;
  
++    // Recovery watchdog (runs once per clock tick).
++    int watchdog_state_seconds_ = 0;
++    int watchdog_idle_seconds_ = 0;
++    DeviceState watchdog_last_state_ = kDeviceStateUnknown;
++
+ 
+     // Event handlers
+     void HandleStateChangedEvent();
+@@ -164,6 +170,8 @@ private:
+     void HandleNetworkDisconnectedEvent();
+     void HandleActivationDoneEvent();
+     void HandleWakeWordDetectedEvent();
++    /** Returns a stalled speaking/listening/connecting state to idle. */
++    void HandleStuckWatchdog();
+     void ContinueOpenAudioChannel(ListeningMode mode);
+     void BeginWakeWordInvoke(const std::string& wake_word);
+     void ContinueWakeWordInvoke(const std::string& wake_word);
 diff --git a/main/boards/common/wifi_board.cc b/main/boards/common/wifi_board.cc
 index 5b3721d..356bc82 100644
 --- a/main/boards/common/wifi_board.cc
@@ -243,10 +353,23 @@ index ac591b5..7d562a2 100644
      const int kTimeoutSeconds = 120;
      auto now = std::chrono::steady_clock::now();
 diff --git a/main/protocols/protocol.h b/main/protocols/protocol.h
-index cfa0dd2..099abbd 100644
+index cfa0dd2..6d63ec3 100644
 --- a/main/protocols/protocol.h
 +++ b/main/protocols/protocol.h
-@@ -66,6 +66,8 @@ public:
+@@ -47,6 +47,12 @@ public:
+     inline int server_sample_rate() const { return server_sample_rate_; }
+     inline int server_frame_duration() const { return server_frame_duration_; }
+     inline const std::string& session_id() const { return session_id_; }
++    /** Seconds since the last inbound message/audio packet (0 = just now). */
++    inline int SecondsSinceLastIncoming() const {
++        auto now = std::chrono::steady_clock::now();
++        return static_cast<int>(
++            std::chrono::duration_cast<std::chrono::seconds>(now - last_incoming_time_).count());
++    }
+ 
+     void OnIncomingAudio(std::function<void(std::unique_ptr<AudioStreamPacket> packet)> callback);
+     void OnIncomingJson(std::function<void(const cJSON* root)> callback);
+@@ -66,6 +72,8 @@ public:
      virtual void SendStopListening();
      virtual void SendAbortSpeaking(AbortReason reason);
      virtual void SendMcpMessage(const std::string& message);
