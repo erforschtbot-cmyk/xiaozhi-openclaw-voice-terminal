@@ -7,70 +7,73 @@ Ein Neuaufbau gilt erst als fertig, wenn alle Punkte bestanden sind.
 ```bash
 ./scripts/verify-host.sh
 systemctl --user is-active openclaw-gateway.service
-systemctl --user is-active xiaozhi-openclaw-gateway.service
+systemctl --user is-active jarvis-realtime-bridge.service
 ```
 
-Im Journal müssen nach Geräteverbindung `XiaoZhi connected`, `Device MCP initialized`
-und ein `ready`-Ereignis erscheinen.
+Im Bridge-Journal müssen nach Geräteverbindung `XiaoZhi connected from`,
+`Device MCP initialized` und ein `ready`-Ereignis mit `consultSessionKey`
+erscheinen.
 
-## B. Schnelle direkte Antwort
+## B. Schnelle direkte Antwort (ohne Werkzeug)
 
-Sprich: **„Jarvis, erzähle einen Witz.“**
+Sprich: **„Jarvis, erzähle einen Witz."**
 
-Erwartet: unmittelbare gesprochene Antwort, danach Zuhören/Bereitschaft; kein
-OpenClaw-Werkzeug erforderlich.
+Erwartet: unmittelbare gesprochene Antwort, danach Bereitschaft. Kein
+OpenClaw-Werkzeug nötig.
 
 ## C. Geräte-MCP
 
-Sprich: **„Jarvis, Lautstärke auf 50 Prozent.“**
+Sprich: **„Jarvis, Lautstärke auf 50 Prozent."**
 
-Erwartet: sofortige Änderung, Anzeige `Lautstärke: 50 %`, keine Voice-Bestätigung.
+Erwartet: sofortige Änderung, Anzeige `Lautstärke: 50 %`, keine Rückfrage.
 
-Sprich: **„Jarvis, Helligkeit auf 40 Prozent.“**
+Sprich: **„Jarvis, Helligkeit auf 40 Prozent."**
 
 Erwartet: sofortige Änderung und Anzeige.
 
-## D. OpenClaw-Lesewerkzeug
+## D. Erstes Werkzeug nach einer Pause (der kritische Test)
+
+1. Etwa 60–120 Sekunden warten, bis das Gerät wieder in Bereitschaft ist.
+2. Sprich: **„Jarvis, wie spät ist es?"**
+3. Zwischenansage abwarten, dann die Zeit hören.
+
+Bestanden nur, wenn **keine** Meldung „Es hat leider nicht geklappt … soll ich es
+nochmal?" erscheint und im Gateway-Journal **kein**
+`SqliteTranscriptMutationConflictError` steht.
+
+Zur Kontrolle, dass der Fehler wirklich ausbleibt:
+
+```bash
+journalctl --user -u openclaw-gateway.service --since "5 min ago" --no-pager \
+  | grep -c SqliteTranscriptMutationConflictError
+# erwartet: 0
+```
+
+Ohne Patch B schlägt genau dieser Schritt reproduzierbar fehl.
+
+## E. Folgefrage ohne neues Wakeword
+
+Direkt nach der Antwort aus D fragen: **„Und wie spät ist es jetzt?"**
+
+Erwartet: keine erneute Werkzeug-Rückfrage mit Fehler; Antwort kommt.
+
+## F. OpenClaw-Lesewerkzeug
 
 Sprich eine Anfrage, die eine Websuche verlangt.
 
-Erwartet: Tool-Aufruf im OpenClaw-Gateway-Journal und anschließend gesprochene
+Erwartet: Werkzeugaufruf im OpenClaw-Gateway-Journal und anschließend gesprochene
 inhaltliche Antwort.
 
-## E. Vorautorisierte Skill-Aktion ohne zweite Bestätigung
+## G. Rückkehr nach Bereitschaft
 
-1. Zielzustand vorher prüfen.
-2. Sprich: **„Jarvis, schalte den WoW-Server an.“**
-3. Der registrierte Wrapper muss unmittelbar ausgeführt werden.
+Sprich eine Werkzeugfrage und warte das Ende ab. Danach prüfen:
 
-Bestanden nur, wenn keine Ja/Nein-Rückfrage gesprochen wird, die Wrapper-Ausgabe
-`OK wow-server-start ...` erscheint und beide Dienste tatsächlich aktiv sind.
+```bash
+journalctl --user -u jarvis-realtime-bridge.service -n 20 --no-pager | tail -8
+```
 
-Smart-Home-Test: **„Jarvis, schalte das Licht im Arbeitszimmer an.“** Der Aufruf
-muss über `openclaw-voice-skill-action alexa-smart-home ...` laufen, HTTP 200
-liefern und darf keine zweite Bestätigung verlangen.
-
-## F. Nicht registrierte Veränderung bleibt bestätigt
-
-1. Zielzustand vorher prüfen.
-2. Fordere eine harmlose, aber nicht registrierte verändernde Testaktion an.
-3. Warte auf die Bestätigungsfrage.
-4. Sprich: **„Ja, mache das.“**
-
-Bestanden nur, wenn alle vier Beweise vorliegen:
-
-- zweites Nutzertranskript enthält `Ja, mache das`;
-- Werkzeug wird wirklich ausgeführt;
-- Jarvis spricht das endgültige Ergebnis;
-- realer Zielzustand ist korrekt (Authserver und Worldserver `active/running`).
-
-Direkte `systemctl`-/`curl`-Aufrufe, unbekannte Wrapper-Aktionen und Befehle mit
-`&&`, `;`, Pipes oder Umleitungen dürfen den vorautorisierten Pfad nicht treffen.
-
-## G. Ablehnung
-
-Eine testweise ausstehende Aktion mit **„Nein“** beantworten. Die Aktion darf nicht
-ausgeführt werden und muss danach verworfen sein.
+Erwartet: `Follow-up window expired; returning to standby` und ein neuer
+`XiaoZhi connected from`. Das Gerät ist danach wieder ansprechbar.
 
 ## H. 24/7 und Reconnect
 
@@ -78,3 +81,16 @@ ausgeführt werden und muss danach verworfen sein.
 - WLAN kurz unterbrechen: Gerät muss gespeicherte Netze selbstständig erneut
   verbinden;
 - Wakeword danach erneut testen.
+
+## I. Hänger-Auflösung
+
+Wiederhole den Ablauf so lange, bis das Gerät sichtbar hängt (falls reproduzierbar).
+Dann:
+
+```bash
+systemctl --user restart jarvis-realtime-bridge.service
+```
+
+Erwartet: Nach wenigen Sekunden verbindet sich das Gerät selbst wieder
+(`XiaoZhi connected from`). Das bestätigt, dass nicht die Firmware „hängt", sondern
+dass ein Socket-Abbruch das Gerät zurück in Bereitschaft bringt.

@@ -7,7 +7,7 @@ usage() {
 }
 
 public_host=""
-install_dir="${XDG_DATA_HOME:-$HOME/.local/share}/xiaozhi-openclaw-gateway"
+install_dir="${XDG_DATA_HOME:-$HOME/.local/share}/jarvis-realtime-bridge"
 while (($#)); do
   case "$1" in
     --public-host) public_host="${2:-}"; shift 2 ;;
@@ -17,24 +17,22 @@ while (($#)); do
 done
 [[ -n "$public_host" ]] || usage
 
-for command_name in python3 node npm openclaw systemctl; do
+for command_name in python3 node systemctl; do
   command -v "$command_name" >/dev/null || { echo "Missing command: $command_name" >&2; exit 1; }
 done
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-mkdir -p "$install_dir" "$HOME/.config/systemd/user" "$HOME/.local/bin"
+mkdir -p "$install_dir" "$HOME/.config/systemd/user"
 install -m 0644 "$repo_dir/gateway/server.py" "$install_dir/server.py"
 install -m 0755 "$repo_dir/gateway/openclaw-talk-realtime.mjs" "$install_dir/openclaw-talk-realtime.mjs"
 install -m 0644 "$repo_dir/gateway/requirements.txt" "$install_dir/requirements.txt"
-install -m 0755 "$repo_dir/scripts/openclaw-voice-skill-action" "$HOME/.local/bin/openclaw-voice-skill-action"
-"$HOME/.local/bin/openclaw-voice-skill-action" --self-test
 
 python3 -m venv "$install_dir/.venv"
 "$install_dir/.venv/bin/python" -m pip install --upgrade pip
 "$install_dir/.venv/bin/python" -m pip install -r "$install_dir/requirements.txt"
 
-unit_target="$HOME/.config/systemd/user/xiaozhi-openclaw-gateway.service"
-python3 - "$repo_dir/systemd/xiaozhi-openclaw-gateway.service.in" "$unit_target" "$install_dir" "$public_host" <<'PY'
+unit_target="$HOME/.config/systemd/user/jarvis-realtime-bridge.service"
+python3 - "$repo_dir/systemd/jarvis-realtime-bridge.service.in" "$unit_target" "$install_dir" "$public_host" <<'PY'
 from pathlib import Path
 import sys
 source, target, install_dir, public_host = sys.argv[1:]
@@ -44,6 +42,6 @@ Path(target).write_text(text)
 PY
 
 systemctl --user daemon-reload
-systemctl --user enable --now xiaozhi-openclaw-gateway.service
-systemctl --user is-active --quiet xiaozhi-openclaw-gateway.service
-echo "Installed and active: xiaozhi-openclaw-gateway.service"
+systemctl --user enable --now jarvis-realtime-bridge.service
+systemctl --user is-active --quiet jarvis-realtime-bridge.service
+echo "Installed and active: jarvis-realtime-bridge.service"

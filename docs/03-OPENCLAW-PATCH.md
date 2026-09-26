@@ -1,100 +1,81 @@
-# 3. OpenClaw: deutsche Voice-Bestätigung
+# 3. OpenClaw: Voice-Patches in `dist`
 
-## Ursache
+OpenClaw verändert für den Voice-Pfad zwei Verhaltensweisen. Beide liegen in
+**kompilierten `dist`-Dateien** und werden von **jedem OpenClaw-Update
+überschrieben**. Nach jedem Update erneut anwenden und verifizieren.
 
-OpenClaw schützt verändernde Voice-Werkzeugaktionen. Der Aufruf wird zunächst
-blockiert und an `agentId + voiceSessionId` gebunden. Erst eine spätere gesprochene
-Bestätigung gibt genau diesen Werkzeugaufruf frei.
+## Patch A — zusätzliche Talk-Sprachbestätigung deaktiviert
 
-OpenClaw `2026.9.5` akzeptierte im installierten Bestätigungsmatcher englische
-Formulierungen wie `yes`, `confirm`, `no` und `cancel`. GPT-Live sprach die
-Rückfrage zwar auf Deutsch aus, aber `Ja, mache das` wurde nicht als Bestätigung
-erkannt. Das führte zu einer erneuten Rückfrage oder zum Ablauf der Aktion.
+Datei: `dist/agent-tools.before-tool-call-*.mjs`
+Funktion: `resolveClientVoiceToolConfirmationPolicy`
+Marker: `voice-confirmation-disabled-by-owner-v1`
 
-## Patch anwenden
+OpenClaw würde verändernde Voice-Werkzeugaktionen zusätzlich per gesprochenem
+Ja/Nein absichern. Der Owner hat das ausdrücklich abgeschaltet. Der Patch setzt die
+Funktion früh auf `{ allowed: true }` — **ohne** Text-, Befehls-, Satzzeichen- oder
+Wortfilter.
+
+## Patch B — Assistant-Transkript wird nicht persistiert
+
+Datei: `dist/handlers-*.mjs`
+Ort: `onTranscript` im Realtime-Relay
+Marker: `voice-test-suppress-assistant-persist-v1`
+
+Das Provider-/Assistant-Transkript (gesprochene KI-Antwort und die Zwischenansage)
+wird **nicht** in die Voice-Session geschrieben. Das User-Transkript bleibt erhalten.
+
+Grund: Zwischenansage und Agenten-Consult schreiben sonst in dasselbe SQLite-Transkript.
+Bei einem frischen Turn (erster Werkzeug-Consult nach einer Pause) kollidieren beide
+Schreiber und der Turn wird verworfen:
+
+```text
+SqliteTranscriptMutationConflictError:
+SQLite transcript changed while preparing rewrite for <sessionId>
+```
+
+Sichtbare Folge ohne Patch: „Es hat leider nicht geklappt … soll ich es nochmal?" —
+obwohl die Werkzeugantwort inhaltlich bereits erzeugt wurde.
+
+## Anwenden und verifizieren
 
 ```bash
-./scripts/apply-openclaw-german-confirmation.py
-./scripts/verify-openclaw-german-confirmation.py
+./scripts/apply-openclaw-voice-dist-patches.py
+./scripts/verify-openclaw-voice-dist-patches.py
 systemctl --user restart openclaw-gateway.service
 ```
 
-Akzeptierte Bejahungen:
+Das Anwenden ist **idempotent**: Ist ein Patch schon aktiv, meldet das Skript
+`already` und schreibt nichts. Vor jeder Änderung wird eine Sicherung
+`<datei>.bak-<marker>-<zeitstempel>` angelegt.
 
-- `ja`
-- `ja mach das`
-- `ja mache das`
-- `mach das` / `mache das`
-- `ja führ das aus` / `ja führe das aus`
-- `führ das aus` / `führe das aus`
-- `bestätigen` / `bestätigt`
+Erwartete Ausgabe bei aktivem Stand:
 
-Akzeptierte Ablehnungen zusätzlich zu Englisch:
+```text
+confirm:agent-tools.before-tool-call-<hash>.mjs: already
+transcript:handlers-<hash>.mjs: already
+Neustart noetig: systemctl --user restart openclaw-gateway.service
+```
 
-- `nein`
-- `abbrechen`
-- `stopp`
-
-## Update-Regel
-
-Der Patch liegt in kompilierten OpenClaw-`dist`-Dateien. Jedes OpenClaw-Update
-kann diese ersetzen. Deshalb nach **jedem** Update:
+## Nach jedem OpenClaw-Update
 
 ```bash
-./scripts/apply-openclaw-german-confirmation.py
-./scripts/verify-openclaw-german-confirmation.py
+./scripts/apply-openclaw-voice-dist-patches.py
+./scripts/verify-openclaw-voice-dist-patches.py
 systemctl --user restart openclaw-gateway.service
 ```
 
 Danach muss der Werkzeugtest aus `04-TESTPLAN.md` real ausgeführt werden. Eine
-erfolgreiche Syntaxprüfung allein beweist die Funktion nicht.
+erfolgreiche Syntax-/Markerprüfung allein beweist die Funktion nicht, und ein
+`already` ohne Neustart bedeutet: der laufende Gateway hat noch den alten Code.
 
-## Vertrauenswürdige Skill-Aktionen ohne zweite Rückfrage
+## Wenn sich das Bundle-Layout ändert
 
-Die normale OpenClaw-Voice-Sperre bleibt aktiv. Nur Aufrufe des lokal
-installierten Wrappers werden vorautorisiert:
-
-```text
-$HOME/.local/bin/openclaw-voice-skill-action
-```
-
-Der Core-Patch akzeptiert ausschließlich komplette `exec`-Befehle in diesen
-Formen:
+Die Skripte suchen ihre Ankerzeilen wörtlich. Findet ein Skript seinen Anker nicht,
+bricht es mit klarer Meldung ab und schreibt nichts:
 
 ```text
-openclaw-voice-skill-action wow-server-start
-openclaw-voice-skill-action wow-server-stop
-openclaw-voice-skill-action alexa-smart-home <URL-kodierter-Text>
-openclaw-voice-skill-action azeroth-gm-safe <URL-kodierter-GM-Befehl>
+<label>: Anker nicht gefunden in <pfad> — Layout hat sich geaendert.
 ```
 
-Die Freigabe gilt nur für `agentId=voice`, das lokale `exec`-Werkzeug und eine
-vollständige Übereinstimmung. Zusätzliche Shell-Operatoren, unbekannte Aktionen,
-direkte `systemctl`-/`curl`-Befehle sowie andere Werkzeuge fallen weiterhin in
-die normale Ja/Nein-Bestätigung.
-
-Der Wrapper validiert die zweite Grenze selbst. `azeroth-gm-safe` akzeptiert nur
-positive `additem`-Aufrufe, Teleport, Recall und `saveall`. Negative Itemzahlen,
-Leveländerungen, Kick, Restart/Shutdown und Datenbankoperationen werden dort
-blockiert.
-
-Installation und Patch:
-
-```bash
-install -Dm0755 scripts/openclaw-voice-skill-action \
-  "$HOME/.local/bin/openclaw-voice-skill-action"
-./scripts/apply-openclaw-voice-skill-policy.py
-./scripts/verify-openclaw-voice-skill-policy.py
-systemctl --user restart openclaw-gateway.service
-```
-
-Nach jedem OpenClaw-Update müssen **beide** Patches erneut angewendet und
-verifiziert werden:
-
-```bash
-./scripts/apply-openclaw-german-confirmation.py
-./scripts/apply-openclaw-voice-skill-policy.py
-./scripts/verify-openclaw-german-confirmation.py
-./scripts/verify-openclaw-voice-skill-policy.py
-systemctl --user restart openclaw-gateway.service
-```
+Dann Ankerzeile im neuen `dist` suchen, Skriptkonstante anpassen, erneut prüfen.
+Niemals blind patchen.

@@ -3,33 +3,66 @@
 ## Logs
 
 ```bash
-journalctl --user -u xiaozhi-openclaw-gateway.service -f
+journalctl --user -u jarvis-realtime-bridge.service -f
 journalctl --user -u openclaw-gateway.service -f
 ```
 
-## „Ja“ wird gehört, aber erneut nach Bestätigung gefragt
+## Werkzeugfrage bricht ab: „Es hat leider nicht geklappt … soll ich es nochmal?"
 
-1. Im XiaoZhi-Log prüfen, ob ein finales Nutzertranskript vorhanden ist.
-2. Deutschen OpenClaw-Patch prüfen und erneut anwenden.
-3. OpenClaw-Gateway neu starten.
-4. Vollständigen Werkzeugtest wiederholen.
+Symptom: Die gesprochene Antwort kommt inhaltlich an, aber der Turn gilt als
+abgebrochen. Im Gateway-Journal:
 
-Nicht die Firmware ändern: Wenn `Ja, mache das` korrekt transkribiert wurde, liegt
-die Freigabe im OpenClaw-Bestätigungsmatcher.
+```text
+lane=talk ... error="SQLite transcript changed while preparing rewrite for <sessionId>"
+lane=session:agent:voice:xiaozhi-realtime-v5-... ...
+[plugins] OpenAI GPT-Live delegation consult failed: SQLite transcript changed ...
+errorName=SqliteTranscriptMutationConflictError
+```
 
-## Anzeige „Zuhören“, aber keine Folgeäußerung wird erkannt
+**Muster (wichtig):** Tritt fast nur beim **ersten Werkzeug-Consult einer frischen
+Voice-Session** auf — also nach einer Pause beziehungsweise nach dem ersten
+Verbindungsaufbau. Innerhalb desselben Gesprächs gehen weitere Werkzeugfragen
+durch. Eine reine Plauderfrage („erzähle einen Witz") löst es nicht aus, weil sie
+keinen Consult braucht — sie etabliert die Session aber, so dass der nächste
+Werkzeugaufruf nicht mehr „der erste" ist.
+
+Ursache: Die Zwischenansage des Providers und der Agenten-Consult schreiben in
+dasselbe SQLite-Transkript; auf einem frischen Transkript kollidieren beide
+Schreiber und der Consult wird vor dem Werkzeugaufruf verworfen.
+
+**Gegenmaßnahme:** Patch B aus `docs/03-OPENCLAW-PATCH.md` anwenden
+(Assistant-Transkript nicht persistieren). Danach Gateway neu starten.
+
+Die Session ist dabei **nicht** beschädigt — der Turn wird atomar verworfen.
+
+## Anzeige „Zuhören", aber keine Folgeäußerung wird erkannt
 
 Audio-Turn und Talk-Session dürfen nicht blind gekoppelt werden. Der bestätigte
-Gatewaystand hält bei einer Werkzeug-Rückfrage dieselbe Talk-Session offen und
-öffnet nach physischem `playback_drained` den Eingang erneut. Keine Timer auf
-Verdacht ändern.
+Stand hält bei einer Werkzeug-Rückfrage dieselbe Talk-Session offen und öffnet nach
+physischem `playback_drained` den Eingang erneut. Keine Timer auf Verdacht ändern.
 
-## „Sprechen“ bleibt hängen
+## „Sprechen" bleibt hängen
 
 - `stream_end` muss an das Gerät gesendet werden.
 - Das Gerät meldet nach geleertem Puffer `playback_drained`.
 - WebSocket-Close braucht `close_timeout=1`; das Board liefert nicht immer einen
   Close-Frame.
+- Die Firmware hat **keinen** Selbstheilungs-Timer. Wenn nichts mehr geht:
+  `systemctl --user restart jarvis-realtime-bridge.service` erzwingt den
+  Socket-Abbruch, und der Abbruch ist das Ereignis, das das Gerät nach Idle bringt.
+
+## Gerät verbindet nach jeder Antwort neu
+
+```text
+Follow-up window expired; returning to standby ...
+XiaoZhi session failed: sent 1000 (OK) follow-up timeout; no close frame received
+XiaoZhi connected from ('...')
+```
+
+Das ist **erwartet**: Das Board antwortet nicht immer mit einem Close-Frame; die
+Bridge wartet 2 s und bricht dann hart ab (`transport.abort()`). Folge: pro Antwort
+entsteht eine neue Voice-Session. Kein Fehler, aber es erklärt, warum so viele
+Session-IDs auflaufen.
 
 ## Antwortanfang oder -ende abgeschnitten
 
@@ -42,8 +75,41 @@ funktionierenden Ablauf. Änderungen immer einzeln testen und rückrollbar halte
 Zuerst das verifizierte App-Image bei `0x20000` wiederherstellen. Nicht ungeprüft
 das gesamte Flashlayout ersetzen. Assets bei `0x800000` und NVS erhalten.
 
+## Nicht sicher, welche Firmware läuft?
+
+Rein lesend prüfen, ohne das Gerät zu verändern:
+
+```bash
+# Boot-Log: Project, Version, Compile time, ELF-SHA256
+sudo python3 scripts/read-device-info.py   # oder seriell mitlesen
+
+# App-Deskriptor direkt lesen (nur read, kein write/erase)
+esptool --port /dev/ttyACM0 --no-stub read-flash 0x20020 0x100 /tmp/desc.bin
+```
+
+Der Deskriptor liegt bei `0x20` im gelesenen 256-Byte-Block:
+
+| Feld | Offset | Länge |
+|---|---:|---:|
+| magic (`0xabcd5432`) | `0x0` | 4 |
+| version | `0x10` | 16 |
+| project | `0x20` | 16 |
+| compile time | `0x30` | 16 |
+| compile date | `0x40` | 16 |
+| ESP-IDF | `0x50` | 16 |
+| ELF-SHA256 | `0x90` | 32 |
+
+**Verwechslungsfalle:** Es existieren mehrere `xiaozhi 2.5.0`-Builds. Unterscheiden
+lässt sich nur über die **Compile time** und den **ELF-Hash**, nicht über Version
+oder Projektname.
+
 ## OpenClaw-Update
 
-Nach Updates ist der deutsche `dist`-Patch wahrscheinlich überschrieben. Patch,
-Verifikation, Gateway-Neustart und End-to-End-Werkzeugtest sind Pflicht.
+Nach Updates sind die `dist`-Patches überschrieben. Patch, Verifikation,
+Gateway-Neustart und End-to-End-Werkzeugtest sind Pflicht:
 
+```bash
+./scripts/apply-openclaw-voice-dist-patches.py
+./scripts/verify-openclaw-voice-dist-patches.py
+systemctl --user restart openclaw-gateway.service
+```
