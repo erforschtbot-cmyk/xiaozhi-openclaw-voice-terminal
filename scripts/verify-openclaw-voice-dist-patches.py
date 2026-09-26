@@ -22,6 +22,7 @@ for path in handlers:
     for needle, what in (
         ("assistantOwnedByConsult: false", "Relay-Feld"),
         ('outcome !== "control"', "provider-direct-Haken"),
+        ("pruneInactiveRelayAgentRuns(relay) === 0", "Reset nur ohne aktiven Run"),
         ("relay.assistantOwnedByConsult = true", "Tool-Call-Haken"),
         ("session.assistantOwnedByConsult = true", "Forced-Consult-Haken"),
         ("pruneInactiveRelayAgentRuns(relay) > 0", "Zweit-Guard"),
