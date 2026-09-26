@@ -105,14 +105,17 @@ B3_REPLACE = (
     '\t\t\t\tif (role === "assistant") {\n'
     '\t\t\t\t\tconst spoken = String(text ?? "").trim();\n'
     '\t\t\t\t\tconst interimAck = /^(i[\'\\u2019]?ll check that request\\.?|ich pr\\u00fcfe das( kurz)?\\.?|einen moment( bitte)?\\.?)$/i.test(spoken);\n'
-    '\t\t\t\t\tif (interimAck) return;\n'
-    '\t\t\t\t\tif (relay.assistantOwnedByConsult) {\n'
-    '\t\t\t\t\t\t// Der Consult hat die Antwort schon geschrieben.\n'
-    '\t\t\t\t\t\trelay.assistantOwnedByConsult = false;\n'
-    '\t\t\t\t\t\treturn;\n'
+    '\t\t\t\t\tconst consultOwns = relay.assistantOwnedByConsult;\n'
+    '\t\t\t\t\tif (consultOwns) relay.assistantOwnedByConsult = false;\n'
+    '\t\t\t\t\t// WICHTIG: nur das Persistieren auslassen — der emit()-Block unten\n'
+    '\t\t\t\t\t// muss IMMER laufen. Ein return hier liess das Geraet im\n'
+    '\t\t\t\t\t// "spricht"-Zustand haengen und machte den Ton abgehackt.\n'
+    '\t\t\t\t\tif (!interimAck && !consultOwns) {\n'
+    '\t\t\t\t\t\tif (!enqueueRelayVoiceTranscript(relay, role, text)) return;\n'
     '\t\t\t\t\t}\n'
+    '\t\t\t\t} else {\n'
+    '\t\t\t\t\tif (!enqueueRelayVoiceTranscript(relay, role, text)) return;\n'
     '\t\t\t\t}\n'
-    '\t\t\t\tif (!enqueueRelayVoiceTranscript(relay, role, text)) return;\n'
     '\t\t\t}\n'
 )
 
@@ -125,6 +128,7 @@ B_NEEDLES = (
     ("assistantOwnedByConsult: false", "Relay-Feld"),
     ("outcome !== \"control\"", "provider-direct-Haken"),
     ("pruneInactiveRelayAgentRuns(relay) === 0", "Reset nur ohne aktiven Run"),
+    ("const consultOwns", "Consult-Uebernahme ohne emit-Abbruch"),
     ("interimAck", "Zwischenansage-Filter"),
 )
 

@@ -23,6 +23,7 @@ for path in handlers:
         ("assistantOwnedByConsult: false", "Relay-Feld"),
         ('outcome !== "control"', "provider-direct-Haken"),
         ("pruneInactiveRelayAgentRuns(relay) === 0", "Reset nur ohne aktiven Run"),
+        ("const consultOwns", "Consult-Uebernahme ohne emit-Abbruch"),
         ("interimAck", "Zwischenansage-Filter"),
     ):
         assert needle in text, f"Patch B Teil fehlt ({what}): {path}"
