@@ -94,7 +94,7 @@ Beide Patches wurden am 26.09.2026 als aktiv verifiziert:
 | Marker | Datei |
 |---|---|
 | `voice-confirmation-disabled-by-owner-v1` | `dist/agent-tools.before-tool-call-*.mjs` |
-| `voice-persist-split-v3` | `dist/handlers-*.mjs` |
+| `voice-test-suppress-assistant-persist-v1` | `dist/handlers-*.mjs` |
 
 `scripts/apply-openclaw-voice-dist-patches.py` ist idempotent geprüft (zweiter
 Lauf meldet `already`, ohne eine Sicherung anzulegen).

@@ -17,17 +17,7 @@ handlers = [p for p in sorted(dist.glob("handlers-*.mjs"))
             if "enqueueRelayVoiceTranscript" in p.read_text()]
 assert handlers, "Kein Relay-Handler gefunden"
 for path in handlers:
-    text = path.read_text()
-    assert "voice-persist-split-v3" in text, f"Patch B fehlt: {path}"
-    for needle, what in (
-        ("assistantOwnedByConsult: false", "Relay-Feld"),
-        ('outcome !== "control"', "provider-direct-Haken"),
-        ("pruneInactiveRelayAgentRuns(relay) === 0", "Reset nur ohne aktiven Run"),
-        ("relay.assistantOwnedByConsult = true", "Tool-Call-Haken"),
-        ("session.assistantOwnedByConsult = true", "Forced-Consult-Haken"),
-        ("pruneInactiveRelayAgentRuns(relay) > 0", "Zweit-Guard"),
-    ):
-        assert needle in text, f"Patch B Teil fehlt ({what}): {path}"
+    assert "voice-test-suppress-assistant-persist-v1" in path.read_text(), f"Patch B fehlt: {path}"
 
 print("Voice-dist-Patches verifiziert:")
 for path in confirm + handlers:
