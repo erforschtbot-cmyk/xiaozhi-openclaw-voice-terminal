@@ -17,7 +17,7 @@ handlers = [p for p in sorted(dist.glob("handlers-*.mjs"))
             if "enqueueRelayVoiceTranscript" in p.read_text()]
 assert handlers, "Kein Relay-Handler gefunden"
 for path in handlers:
-    assert "voice-test-suppress-assistant-persist-v1" in path.read_text(), f"Patch B fehlt: {path}"
+    assert "voice-persist-split-v2" in path.read_text(), f"Patch B fehlt: {path}"
 
 print("Voice-dist-Patches verifiziert:")
 for path in confirm + handlers:

@@ -35,12 +35,21 @@ MARK_A = 'voice-confirmation-disabled-by-owner-v1'
 
 ANCHOR_B = '\t\t\tif (final && !enqueueRelayVoiceTranscript(relay, role, text)) return;\n'
 PATCH_B = (
-    '\t\t\t// voice-test-suppress-assistant-persist-v1\n'
-    '\t\t\t// Owner-Test: Assistant-/Provider-Transkript (KI-Antwort + "check request")\n'
-    '\t\t\t// wird NICHT mehr in die Session geschrieben. User-Transkript bleibt.\n'
-    '\t\t\tif (final && role !== "assistant" && !enqueueRelayVoiceTranscript(relay, role, text)) return;\n'
+    '\t\t\t// voice-persist-split-v2\n'
+    '\t\t\t// Owner-Vorgabe: User-Text und Assistant-Text sollen beide gespeichert\n'
+    '\t\t\t// werden, aber GETRENNT. Verworfen wird nur die Zwischenansage\n'
+    '\t\t\t// ("I\'ll check that request"), weil sie der zweite Schreiber war und\n'
+    '\t\t\t// den SQLite-Konflikt ausgeloest hat.\n'
+    '\t\t\tif (final) {\n'
+    '\t\t\t\tif (role === "assistant") {\n'
+    '\t\t\t\t\tconst spoken = String(text ?? "").trim();\n'
+    '\t\t\t\t\tconst interimAck = /^(i[\'\\u2019]?ll check that request\\.?|ich pr\\u00fcfe das( kurz)?\\.?|einen moment( bitte)?\\.?)$/i.test(spoken);\n'
+    '\t\t\t\t\tif (interimAck || pruneInactiveRelayAgentRuns(relay) > 0) return;\n'
+    '\t\t\t\t}\n'
+    '\t\t\t\tif (!enqueueRelayVoiceTranscript(relay, role, text)) return;\n'
+    '\t\t\t}\n'
 )
-MARK_B = 'voice-test-suppress-assistant-persist-v1'
+MARK_B = 'voice-persist-split-v2'
 
 
 def patch(path: pathlib.Path, anchor: str, replacement: str, marker: str, label: str) -> str:
