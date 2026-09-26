@@ -67,10 +67,10 @@ def main() -> int:
         raise SystemExit(f"Unerwartete Deskriptor-Magic: {magic:#010x}")
 
     print("Geraet: Firmware-Ist-Stand (nur gelesen, nichts geschrieben)")
-    print(f"  project    : {field(block, 0x20, 16)}")
-    print(f"  version    : {field(block, 0x10, 16)}")
-    print(f"  compile    : {field(block, 0x30, 16)} {field(block, 0x40, 16)}")
-    print(f"  esp-idf    : {field(block, 0x50, 16)}")
+    print(f"  project    : {field(block, 0x30, 32)}")
+    print(f"  version    : {field(block, 0x10, 32)}")
+    print(f"  compile    : {field(block, 0x50, 16)} {field(block, 0x60, 16)}")
+    print(f"  esp-idf    : {field(block, 0x70, 32)}")
     print(f"  elf-sha256 : {block[0x90:0xB0].hex()}")
     print()
     print("Abgleich: gegen firmware/prebuilt/ und VERSIONS.md stellen. "

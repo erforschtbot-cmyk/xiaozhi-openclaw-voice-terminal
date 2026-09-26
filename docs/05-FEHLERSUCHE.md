@@ -109,16 +109,16 @@ sudo python3 scripts/read-device-info.py   # oder seriell mitlesen
 esptool --port /dev/ttyACM0 --no-stub read-flash 0x20020 0x100 /tmp/desc.bin
 ```
 
-Der Deskriptor liegt bei `0x20` im gelesenen 256-Byte-Block:
+Der Deskriptor (`esp_app_desc_t`) beginnt direkt am gelesenen Offset `0x20020`:
 
 | Feld | Offset | Länge |
 |---|---:|---:|
-| magic (`0xabcd5432`) | `0x0` | 4 |
-| version | `0x10` | 16 |
-| project | `0x20` | 16 |
-| compile time | `0x30` | 16 |
-| compile date | `0x40` | 16 |
-| ESP-IDF | `0x50` | 16 |
+| magic (`0xabcd5432`) | `0x00` | 4 |
+| version | `0x10` | 32 |
+| project | `0x30` | 32 |
+| compile time | `0x50` | 16 |
+| compile date | `0x60` | 16 |
+| ESP-IDF | `0x70` | 32 |
 | ELF-SHA256 | `0x90` | 32 |
 
 **Verwechslungsfalle:** Es existieren mehrere `xiaozhi 2.5.0`-Builds. Unterscheiden
