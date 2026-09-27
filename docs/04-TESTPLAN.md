@@ -14,6 +14,17 @@ Im Bridge-Journal müssen nach Geräteverbindung `XiaoZhi connected from`,
 `Device MCP initialized` und ein `ready`-Ereignis mit `consultSessionKey`
 erscheinen.
 
+## A2. Animiertes Gesicht
+
+- In Bereitschaft: Augen bewegen sich gelegentlich und blinzeln; die Darstellung
+  atmet leicht.
+- Nach „Jarvis“: Augen werden sichtbar aufmerksamer.
+- Beim Sprechen: der ruhende Mund wechselt auf drei animierte Balken.
+- Statusleiste und Untertitel bleiben über dem Gesicht sichtbar.
+
+Bestanden nur, wenn das Display stabil bleibt und keine Reboots, Watchdog- oder
+LVGL-Fehler auftreten.
+
 ## B. Schnelle direkte Antwort (ohne Werkzeug)
 
 Sprich: **„Jarvis, erzähle einen Witz."**

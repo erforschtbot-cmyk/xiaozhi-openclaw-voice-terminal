@@ -62,8 +62,31 @@ Die Firmware-Patches enthalten:
 - `stream_end`, damit „Sprechen" erst nach geleertem Lautsprecher endet;
 - **Wiederherstellungs-Watchdog**, der hängende Gesprächszustände selbstständig
   nach Bereitschaft zurückführt (siehe `docs/02-FIRMWARE.md`);
+- board-spezifisches animiertes OpenClaw-Gesicht mit Blinzeln, Blickbewegung,
+  Atmung, Emotionsfarben und animierten Mundbalken beim Sprechen;
 - IDF-6.1-Kompatibilität für `uart-uhci`;
 - lokales OTA-/WebSocket-Ziel.
+
+## Animiertes Gesicht ohne Architekturwechsel
+
+Für das Waveshare-4B wird statt `RgbLcdDisplay` die davon abgeleitete Klasse
+`JarvisFaceDisplay` instanziiert. Sie ersetzt ausschließlich die zentrale
+Emoji-Darstellung durch LVGL-Objekte. Statusleiste, Untertitel, Touch, Helligkeit
+und alle Gerätefunktionen bleiben die vorhandenen XiaoZhi-Komponenten.
+
+Die Anzeige reagiert auf die bereits vorhandenen Aufrufe `SetStatus()` und
+`SetEmotion()`:
+
+- Bereitschaft: ruhiges Atmen, zufällige Blickbewegungen und Blinzeln;
+- Zuhören: größere, aufmerksame Augen;
+- Verbinden/Denken: violette, nachdenkliche Darstellung;
+- Sprechen: drei animierte Mundbalken;
+- Emotionen wie `happy`, `excited`, `sleepy` und `sad`: weiche Übergänge von
+  Farbe, Augenform und Mundkurve.
+
+Es wurden dafür keine Audio-, Wakeword-, Protokoll-, WLAN-, OTA- oder
+Bridge-Funktionen verändert. Der Code liegt im Firmware-Patch als
+`main/boards/waveshare/esp32-s3-touch-lcd-4b/jarvis_face_display.{h,cc}`.
 
 ## Bekannte Timer der Firmware (Ist-Stand)
 

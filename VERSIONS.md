@@ -23,10 +23,14 @@ Diese Werte sind der **Ist-Stand vom 2026-09-27** auf dem Referenzhost.
 |---|---|
 | Project | `xiaozhi` |
 | Version | `2.5.0` |
-| Compile time | `Sep 26 2026 19:10:55` (mit Watchdog) |
-| ELF-SHA256 (Präfix) | `2d817b23a349060d` |
+| Compile time | `Sep 27 2026 08:12:48` (Watchdog + animiertes Gesicht) |
+| ELF-SHA256 (Präfix) | `a7295b2bbb21005d` |
 | ESP-IDF | `v6.1-803-g94639ab7251` |
 | Geräte-MAC | `94:a9:90:cc:8d:b4` |
+
+Direkter Rückweg zum vorherigen Watchdog-Stand mit statischem Smiley:
+`Sep 26 2026 19:10:55`, ELF `2d817b23a349060d`
+(`firmware/prebuilt/previous-watchdog-smiley/xiaozhi.bin`).
 
 Rückweg ohne Watchdog: `Sep 23 2026 08:43:24`, ELF `b6bf3e74cef7c701`
 (`firmware/prebuilt/previous-no-watchdog/xiaozhi.bin`).

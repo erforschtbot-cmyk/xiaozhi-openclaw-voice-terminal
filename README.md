@@ -2,13 +2,14 @@
 
 Dieses private Repository enthält **alle projektspezifischen Dateien und Anleitungen**,
 um das funktionierende Jarvis-System auf einem leeren Linux-/OpenClaw-Host exakt
-wiederherzustellen — so, wie es am **2026-09-26** auf dem Referenzhost läuft.
+wiederherzustellen — so, wie es am **2026-09-27** auf dem Referenzhost läuft.
 
 ## Was hier drin ist
 
 | Bestandteil | Datei(en) |
 |---|---|
 | Firmware-Patches gegen den gepinnten Upstream | `firmware/patches/` |
+| Board-spezifisches animiertes OpenClaw-Gesicht | im XiaoZhi-Patch unter `jarvis_face_display.*` |
 | Wiederherstellungs-Watchdog (im Firmware-Patch) | `firmware/patches/xiaozhi-esp32-openclaw.patch` |
 | Bestätigte Firmware-Images (Wiederherstellungsanker) | `firmware/prebuilt/` |
 | Aufgelöste Abhängigkeiten des Firmware-Builds | `firmware/dependencies.lock` |
@@ -112,13 +113,15 @@ Aus dem Boot-Log und dem App-Deskriptor des Geräts gelesen:
 |---|---|
 | Project | `xiaozhi` |
 | Version | `2.5.0` |
-| Compile time | **Sep 26 2026 19:10:55** |
-| ELF-SHA256 | `2d817b23a349060d…` |
+| Compile time | **Sep 27 2026 08:12:48** |
+| ELF-SHA256 | `a7295b2bbb21005d…` |
 | ESP-IDF | `v6.1-803-g94639ab7251` |
 | Board | `esp32-s3-touch-lcd-4b` |
 
-Dieser Stand enthält den **Wiederherstellungs-Watchdog** (siehe
-`docs/02-FIRMWARE.md`).
+Dieser Stand enthält den **Wiederherstellungs-Watchdog** und das animierte,
+board-spezifische OpenClaw-Gesicht (siehe `docs/02-FIRMWARE.md`). Der komplette
+Sprach-, Wakeword-, Netzwerk- und Bridge-Pfad ist gegenüber dem vorherigen
+Watchdog-Build unverändert.
 
 Verwechslungsgefahr: Es existieren weitere `xiaozhi 2.5.0`-Builds, u. a. der
 vorherige bewährte Stand **23.09. 08:43** (ELF `b6bf3e74…`) und ein weiterer vom
@@ -133,6 +136,7 @@ sie — nur Compile-Zeit und ELF-Hash.
 |---|---|---|
 | `xiaozhi.bin` | Nur App-Partition (`ota_0`) des laufenden Watchdog-Builds | `0x20000` |
 | `merged-binary.bin` | Vollständiges Image, **NVS auf `0xFF` geleert** | `0x0` (nur Rettungsfall) |
+| `previous-watchdog-smiley/xiaozhi.bin` | Vorheriger Watchdog-Stand mit statischem Smiley (`2d817b23…`) | `0x20000` |
 | `previous-no-watchdog/xiaozhi.bin` | Vorheriger bewährter Stand (`b6bf3e74…`), ohne Watchdog | `0x20000` |
 
 Das NVS im Vollimage wurde bewusst geleert: Es enthält WLAN-Zugangsdaten im

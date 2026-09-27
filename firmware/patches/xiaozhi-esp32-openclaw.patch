@@ -241,9 +241,16 @@ index 42fbf22..b70bcc8 100644
 \ No newline at end of file
 +}
 diff --git a/main/boards/waveshare/esp32-s3-touch-lcd-4b/esp32-s3-touch-lcd-4b.cc b/main/boards/waveshare/esp32-s3-touch-lcd-4b/esp32-s3-touch-lcd-4b.cc
-index 9ab6535..3314af0 100644
+index 9ab6535..067e313 100644
 --- a/main/boards/waveshare/esp32-s3-touch-lcd-4b/esp32-s3-touch-lcd-4b.cc
 +++ b/main/boards/waveshare/esp32-s3-touch-lcd-4b/esp32-s3-touch-lcd-4b.cc
+@@ -1,5 +1,5 @@
+ #include "wifi_board.h"
+-#include "display/lcd_display.h"
++#include "jarvis_face_display.h"
+ #include "esp_lcd_st7701.h"
+ 
+ #include "codecs/box_audio_codec.h"
 @@ -116,16 +116,10 @@ private:
      bool key_handled;
  
@@ -265,6 +272,15 @@ index 9ab6535..3314af0 100644
      }
  
      void InitializeCodecI2c() {
+@@ -233,7 +227,7 @@ private:
+         ESP_ERROR_CHECK(esp_lcd_new_panel_st7701(panel_io, &panel_config, &panel_handle));
+         esp_lcd_panel_init(panel_handle);
+ 
+-        display_ = new RgbLcdDisplay(panel_io, panel_handle,
++        display_ = new JarvisFaceDisplay(panel_io, panel_handle,
+                                   DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X,
+                                   DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
+     }
 @@ -406,6 +400,15 @@ public:
          return &audio_codec;
      }
@@ -309,6 +325,425 @@ index 9ab6535..3314af0 100644
      }
  };
  
+diff --git a/main/boards/waveshare/esp32-s3-touch-lcd-4b/jarvis_face_display.cc b/main/boards/waveshare/esp32-s3-touch-lcd-4b/jarvis_face_display.cc
+new file mode 100644
+index 0000000..0efdb4e
+--- /dev/null
++++ b/main/boards/waveshare/esp32-s3-touch-lcd-4b/jarvis_face_display.cc
+@@ -0,0 +1,341 @@
++#include "jarvis_face_display.h"
++
++#include "assets/lang_config.h"
++
++#include <algorithm>
++#include <cstring>
++
++#include <esp_log.h>
++#include <esp_timer.h>
++
++namespace {
++constexpr char TAG[] = "JarvisFace";
++constexpr uint16_t kTickMs = 33;
++}
++
++JarvisFaceDisplay::JarvisFaceDisplay(esp_lcd_panel_io_handle_t panel_io,
++                                     esp_lcd_panel_handle_t panel, int width, int height,
++                                     int offset_x, int offset_y, bool mirror_x, bool mirror_y,
++                                     bool swap_xy)
++    : RgbLcdDisplay(panel_io, panel, width, height, offset_x, offset_y, mirror_x, mirror_y,
++                    swap_xy) {}
++
++JarvisFaceDisplay::~JarvisFaceDisplay() {
++    DisplayLockGuard lock(this);
++    if (face_timer_ != nullptr) {
++        lv_timer_delete(face_timer_);
++        face_timer_ = nullptr;
++    }
++    if (face_root_ != nullptr) {
++        lv_obj_delete(face_root_);
++        face_root_ = nullptr;
++    }
++}
++
++int32_t JarvisFaceDisplay::EaseOutCubic(int32_t q10) {
++    const int32_t inv = 1024 - q10;
++    return 1024 - static_cast<int32_t>((static_cast<int64_t>(inv) * inv * inv) >> 20);
++}
++
++void JarvisFaceDisplay::StartTween(Tween& tween, int32_t target, uint16_t duration_ms) {
++    if (tween.to == target && tween.elapsed_ms < tween.duration_ms) {
++        return;
++    }
++    tween.from = tween.value;
++    tween.to = target;
++    tween.elapsed_ms = 0;
++    tween.duration_ms = std::max<uint16_t>(duration_ms, 1);
++}
++
++void JarvisFaceDisplay::StepTween(Tween& tween, uint16_t dt_ms) {
++    if (tween.elapsed_ms >= tween.duration_ms) {
++        tween.value = tween.to;
++        return;
++    }
++    tween.elapsed_ms = std::min<uint16_t>(tween.duration_ms, tween.elapsed_ms + dt_ms);
++    const int32_t progress = static_cast<int32_t>(tween.elapsed_ms) * 1024 / tween.duration_ms;
++    const int32_t eased = EaseOutCubic(progress);
++    tween.value = tween.from +
++                  static_cast<int32_t>((static_cast<int64_t>(tween.to - tween.from) * eased) >> 10);
++}
++
++void JarvisFaceDisplay::SetupUI() {
++    RgbLcdDisplay::SetupUI();
++    DisplayLockGuard lock(this);
++    CreateFace();
++}
++
++void JarvisFaceDisplay::CreateFace() {
++    if (face_root_ != nullptr) {
++        return;
++    }
++    lv_obj_t* screen = lv_screen_active();
++    face_root_ = lv_obj_create(screen);
++    lv_obj_remove_style_all(face_root_);
++    lv_obj_set_size(face_root_, LV_PCT(100), LV_PCT(100));
++    lv_obj_set_style_bg_color(face_root_, lv_color_black(), 0);
++    lv_obj_set_style_bg_opa(face_root_, LV_OPA_COVER, 0);
++    lv_obj_remove_flag(face_root_, LV_OBJ_FLAG_SCROLLABLE);
++    lv_obj_remove_flag(face_root_, LV_OBJ_FLAG_CLICKABLE);
++
++    for (size_t i = 0; i < eyes_.size(); ++i) {
++        eyes_[i] = lv_obj_create(face_root_);
++        lids_[i] = lv_obj_create(face_root_);
++        for (lv_obj_t* object : {eyes_[i], lids_[i]}) {
++            lv_obj_remove_style_all(object);
++            lv_obj_set_style_bg_opa(object, LV_OPA_COVER, 0);
++            lv_obj_remove_flag(object, LV_OBJ_FLAG_CLICKABLE);
++        }
++        lv_obj_set_style_radius(eyes_[i], 40, 0);
++        lv_obj_set_style_transform_pivot_x(eyes_[i], lv_pct(50), 0);
++        lv_obj_set_style_transform_pivot_y(eyes_[i], lv_pct(50), 0);
++        lv_obj_set_style_bg_color(lids_[i], lv_color_black(), 0);
++        lv_obj_set_style_radius(lids_[i], 8, 0);
++        lv_obj_add_flag(lids_[i], LV_OBJ_FLAG_HIDDEN);
++    }
++
++    mouth_arc_ = lv_arc_create(face_root_);
++    lv_obj_remove_style_all(mouth_arc_);
++    lv_obj_set_style_arc_width(mouth_arc_, 10, LV_PART_MAIN);
++    lv_obj_set_style_arc_rounded(mouth_arc_, true, LV_PART_MAIN);
++    lv_obj_set_style_arc_opa(mouth_arc_, LV_OPA_COVER, LV_PART_MAIN);
++    lv_obj_set_style_arc_opa(mouth_arc_, LV_OPA_TRANSP, LV_PART_INDICATOR);
++    lv_obj_set_style_bg_opa(mouth_arc_, LV_OPA_TRANSP, LV_PART_KNOB);
++    lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_CLICKABLE);
++
++    for (lv_obj_t*& bar : mouth_bars_) {
++        bar = lv_obj_create(face_root_);
++        lv_obj_remove_style_all(bar);
++        lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
++        lv_obj_set_style_radius(bar, 12, 0);
++        lv_obj_remove_flag(bar, LV_OBJ_FLAG_CLICKABLE);
++        lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
++    }
++
++    if (emoji_box_ != nullptr) {
++        lv_obj_add_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
++    }
++    for (lv_obj_t* overlay : {top_bar_, status_bar_, bottom_bar_, low_battery_popup_}) {
++        if (overlay != nullptr) {
++            lv_obj_move_foreground(overlay);
++        }
++    }
++
++    last_tick_us_ = esp_timer_get_time();
++    ScheduleBlink(last_tick_us_);
++    ScheduleGaze(last_tick_us_);
++    face_timer_ = lv_timer_create(TimerThunk, kTickMs, this);
++    ESP_LOGI(TAG, "Animated OpenClaw face enabled");
++}
++
++void JarvisFaceDisplay::TimerThunk(lv_timer_t* timer) {
++    auto* self = static_cast<JarvisFaceDisplay*>(lv_timer_get_user_data(timer));
++    if (self != nullptr) {
++        self->Tick();
++    }
++}
++
++void JarvisFaceDisplay::ScheduleBlink(int64_t now_us) {
++    rng_ ^= rng_ << 13;
++    rng_ ^= rng_ >> 17;
++    rng_ ^= rng_ << 5;
++    next_blink_us_ = now_us + (2200 + rng_ % 2600) * 1000LL;
++}
++
++void JarvisFaceDisplay::ScheduleGaze(int64_t now_us) {
++    rng_ ^= rng_ << 13;
++    rng_ ^= rng_ >> 17;
++    rng_ ^= rng_ << 5;
++    int32_t x = static_cast<int32_t>(rng_ % 31) - 15;
++    rng_ ^= rng_ << 13;
++    rng_ ^= rng_ >> 17;
++    rng_ ^= rng_ << 5;
++    int32_t y = static_cast<int32_t>(rng_ % 19) - 9;
++    if (face_state_ == FaceState::Connecting) {
++        x -= 9;
++        y -= 8;
++    }
++    StartTween(gaze_x_, x, 260);
++    StartTween(gaze_y_, y, 260);
++    next_gaze_us_ = now_us + (1500 + rng_ % 2400) * 1000LL;
++}
++
++void JarvisFaceDisplay::SetFaceState(FaceState state) {
++    if (face_state_ == state) {
++        return;
++    }
++    face_state_ = state;
++    if (state == FaceState::Listening) {
++        StartTween(eye_height_, 112, 220);
++        StartTween(eye_width_, 105, 220);
++    } else if (state == FaceState::Connecting) {
++        StartTween(eye_height_, 82, 260);
++        StartTween(eye_width_, 96, 260);
++        ApplyMood("thinking");
++    } else {
++        StartTween(eye_height_, 100, 260);
++        StartTween(eye_width_, 100, 260);
++    }
++}
++
++void JarvisFaceDisplay::SetStatus(const char* status) {
++    RgbLcdDisplay::SetStatus(status);
++    DisplayLockGuard lock(this);
++    if (status == nullptr) {
++        return;
++    }
++    if (std::strcmp(status, Lang::Strings::LISTENING) == 0) {
++        SetFaceState(FaceState::Listening);
++    } else if (std::strcmp(status, Lang::Strings::SPEAKING) == 0) {
++        SetFaceState(FaceState::Speaking);
++    } else if (std::strcmp(status, Lang::Strings::CONNECTING) == 0) {
++        SetFaceState(FaceState::Connecting);
++    } else if (std::strcmp(status, Lang::Strings::STANDBY) == 0) {
++        SetFaceState(FaceState::Idle);
++    }
++}
++
++void JarvisFaceDisplay::ApplyMood(const char* emotion) {
++    uint32_t color = 0x53d7ff;
++    int32_t eye_h = face_state_ == FaceState::Listening ? 112 : 100;
++    int32_t eye_w = face_state_ == FaceState::Listening ? 105 : 100;
++    int32_t smile = 24;
++    if (emotion != nullptr && std::strcmp(emotion, "happy") == 0) {
++        color = 0xffd166;
++        eye_h = 76;
++        eye_w = 106;
++        smile = 92;
++    } else if (emotion != nullptr && (std::strcmp(emotion, "excited") == 0 ||
++                                      std::strcmp(emotion, "surprised") == 0)) {
++        color = 0xff7a4d;
++        eye_h = 120;
++        eye_w = 98;
++        smile = 78;
++    } else if (emotion != nullptr && std::strcmp(emotion, "thinking") == 0) {
++        color = 0x9b8cff;
++        eye_h = 82;
++        eye_w = 96;
++        smile = 8;
++    } else if (emotion != nullptr && std::strcmp(emotion, "sleepy") == 0) {
++        color = 0x62b8a8;
++        eye_h = 62;
++        eye_w = 102;
++        smile = 14;
++    } else if (emotion != nullptr && std::strcmp(emotion, "sad") == 0) {
++        color = 0x5f8bff;
++        eye_h = 80;
++        eye_w = 94;
++        smile = -72;
++    }
++    StartTween(eye_height_, eye_h, 280);
++    StartTween(eye_width_, eye_w, 280);
++    StartTween(smile_, smile, 280);
++    StartTween(red_, (color >> 16) & 0xff, 280);
++    StartTween(green_, (color >> 8) & 0xff, 280);
++    StartTween(blue_, color & 0xff, 280);
++}
++
++void JarvisFaceDisplay::SetEmotion(const char* emotion) {
++    DisplayLockGuard lock(this);
++    ApplyMood(emotion);
++}
++
++void JarvisFaceDisplay::Tick() {
++    if (face_root_ == nullptr) {
++        return;
++    }
++    const int64_t now_us = esp_timer_get_time();
++    uint16_t dt_ms = static_cast<uint16_t>(std::clamp<int64_t>((now_us - last_tick_us_) / 1000, 4, 80));
++    last_tick_us_ = now_us;
++    ++tick_count_;
++
++    if (blink_phase_ == 0 && now_us >= next_blink_us_) {
++        blink_phase_ = 1;
++        blink_elapsed_ms_ = 0;
++        ScheduleBlink(now_us);
++    }
++    int32_t blink_q10 = 1024;
++    if (blink_phase_ != 0) {
++        blink_elapsed_ms_ += dt_ms;
++        if (blink_phase_ == 1) {
++            blink_q10 = std::max<int32_t>(0, 1024 - blink_elapsed_ms_ * 1024 / 75);
++            if (blink_elapsed_ms_ >= 75) {
++                blink_phase_ = 2;
++                blink_elapsed_ms_ = 0;
++            }
++        } else if (blink_phase_ == 2) {
++            blink_q10 = 0;
++            if (blink_elapsed_ms_ >= 35) {
++                blink_phase_ = 3;
++                blink_elapsed_ms_ = 0;
++            }
++        } else {
++            blink_q10 = std::min<int32_t>(1024, blink_elapsed_ms_ * 1024 / 140);
++            if (blink_elapsed_ms_ >= 140) {
++                blink_phase_ = 0;
++                blink_q10 = 1024;
++            }
++        }
++    }
++    if (now_us >= next_gaze_us_) {
++        ScheduleGaze(now_us);
++    }
++
++    for (Tween* tween : {&eye_height_, &eye_width_, &gaze_x_, &gaze_y_, &smile_, &red_,
++                         &green_, &blue_}) {
++        StepTween(*tween, dt_ms);
++    }
++
++    static constexpr int8_t kBreath[] = {0, 1, 2, 3, 4, 3, 2, 1, 0, -1, -2, -1};
++    const int32_t breath = kBreath[(tick_count_ / 4) % std::size(kBreath)];
++    const int32_t base_eye_w = width_ * 23 / 100;
++    const int32_t base_eye_h = height_ * 23 / 100;
++    int32_t eye_w = base_eye_w * (eye_width_.value + breath) / 100;
++    int32_t eye_h = base_eye_h * (eye_height_.value + breath) / 100;
++    eye_h = std::max<int32_t>(6, eye_h * blink_q10 / 1024);
++    const int32_t center_x = width_ / 2 + gaze_x_.value;
++    const int32_t center_y = height_ * 40 / 100 + gaze_y_.value + breath;
++    const int32_t gap = width_ * 19 / 100;
++    const lv_color_t color = lv_color_make(red_.value, green_.value, blue_.value);
++
++    for (size_t i = 0; i < eyes_.size(); ++i) {
++        const int32_t x = center_x + (i == 0 ? -gap : gap) - eye_w / 2;
++        lv_obj_set_size(eyes_[i], eye_w, eye_h);
++        lv_obj_set_pos(eyes_[i], x, center_y - eye_h / 2);
++        lv_obj_set_style_bg_color(eyes_[i], color, 0);
++        const int32_t tilt = smile_.value / 3;
++        lv_obj_set_style_transform_rotation(eyes_[i], i == 0 ? tilt : -tilt, 0);
++    }
++
++    const int32_t mouth_y = height_ * 69 / 100;
++    if (face_state_ == FaceState::Speaking) {
++        lv_obj_add_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
++        for (size_t i = 0; i < mouth_bars_.size(); ++i) {
++            const uint32_t phase = tick_count_ * (i + 2) + i * 7;
++            const int32_t h = 12 + static_cast<int32_t>((phase * 17 + phase * phase) % 48);
++            const int32_t w = 30 - h / 8;
++            lv_obj_remove_flag(mouth_bars_[i], LV_OBJ_FLAG_HIDDEN);
++            lv_obj_set_size(mouth_bars_[i], w, h);
++            lv_obj_set_pos(mouth_bars_[i], width_ / 2 + (static_cast<int32_t>(i) - 1) * 58 - w / 2,
++                           mouth_y - h / 2);
++            lv_obj_set_style_bg_color(mouth_bars_[i], color, 0);
++        }
++    } else {
++        for (lv_obj_t* bar : mouth_bars_) {
++            lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
++        }
++        int32_t curve = smile_.value;
++        if (curve > -8 && curve < 8) curve = curve < 0 ? -8 : 8;
++        const int32_t diameter = 300 - std::abs(curve);
++        lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
++        lv_obj_set_size(mouth_arc_, diameter, diameter);
++        if (curve > 0) {
++            lv_arc_set_bg_angles(mouth_arc_, 55, 125);
++            lv_obj_set_pos(mouth_arc_, width_ / 2 - diameter / 2, mouth_y - diameter + 22);
++        } else {
++            lv_arc_set_bg_angles(mouth_arc_, 235, 305);
++            lv_obj_set_pos(mouth_arc_, width_ / 2 - diameter / 2, mouth_y - 22);
++        }
++        lv_obj_set_style_arc_color(mouth_arc_, color, LV_PART_MAIN);
++    }
++}
+diff --git a/main/boards/waveshare/esp32-s3-touch-lcd-4b/jarvis_face_display.h b/main/boards/waveshare/esp32-s3-touch-lcd-4b/jarvis_face_display.h
+new file mode 100644
+index 0000000..986ba0a
+--- /dev/null
++++ b/main/boards/waveshare/esp32-s3-touch-lcd-4b/jarvis_face_display.h
+@@ -0,0 +1,66 @@
++#pragma once
++
++#include "display/lcd_display.h"
++
++#include <array>
++#include <cstdint>
++#include <string>
++
++class JarvisFaceDisplay final : public RgbLcdDisplay {
++public:
++    JarvisFaceDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel, int width,
++                      int height, int offset_x, int offset_y, bool mirror_x, bool mirror_y,
++                      bool swap_xy);
++    ~JarvisFaceDisplay() override;
++
++    void SetupUI() override;
++    void SetStatus(const char* status) override;
++    void SetEmotion(const char* emotion) override;
++
++private:
++    enum class FaceState : uint8_t { Idle, Connecting, Listening, Speaking };
++
++    struct Tween {
++        int32_t from = 0;
++        int32_t to = 0;
++        int32_t value = 0;
++        uint16_t elapsed_ms = 1;
++        uint16_t duration_ms = 1;
++    };
++
++    static void TimerThunk(lv_timer_t* timer);
++    static int32_t EaseOutCubic(int32_t q10);
++    static void StartTween(Tween& tween, int32_t target, uint16_t duration_ms);
++    static void StepTween(Tween& tween, uint16_t dt_ms);
++
++    void CreateFace();
++    void Tick();
++    void SetFaceState(FaceState state);
++    void ApplyMood(const char* emotion);
++    void ScheduleBlink(int64_t now_us);
++    void ScheduleGaze(int64_t now_us);
++
++    lv_obj_t* face_root_ = nullptr;
++    std::array<lv_obj_t*, 2> eyes_{};
++    std::array<lv_obj_t*, 2> lids_{};
++    lv_obj_t* mouth_arc_ = nullptr;
++    std::array<lv_obj_t*, 3> mouth_bars_{};
++    lv_timer_t* face_timer_ = nullptr;
++
++    FaceState face_state_ = FaceState::Idle;
++    Tween eye_height_{100, 100, 100};
++    Tween eye_width_{100, 100, 100};
++    Tween gaze_x_{};
++    Tween gaze_y_{};
++    Tween smile_{24, 24, 24};
++    Tween red_{83, 83, 83};
++    Tween green_{215, 215, 215};
++    Tween blue_{255, 255, 255};
++    int64_t last_tick_us_ = 0;
++    int64_t next_blink_us_ = 0;
++    int64_t next_gaze_us_ = 0;
++    uint16_t blink_elapsed_ms_ = 0;
++    uint8_t blink_phase_ = 0;
++    uint32_t tick_count_ = 0;
++    uint32_t rng_ = 0x9d2c5680;
++};
 diff --git a/main/idf_component.yml b/main/idf_component.yml
 index 2473f56..17d0797 100644
 --- a/main/idf_component.yml
