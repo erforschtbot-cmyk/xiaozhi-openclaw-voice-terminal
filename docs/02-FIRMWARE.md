@@ -64,6 +64,9 @@ Die Firmware-Patches enthalten:
   nach Bereitschaft zurückführt (siehe `docs/02-FIRMWARE.md`);
 - board-spezifisches animiertes OpenClaw-Gesicht mit Blinzeln, Blickbewegung,
   Atmung, Emotionsfarben und animierten Mundbalken beim Sprechen;
+- Render-Cache für unveränderte Farben, Rotation und Geometrie, entfernte tote
+  Lid-Objekte sowie LVGL auf Kern 1 mit 5-ms-Zeitbasis; Zustände und sichtbare
+  50-ms-Gesichtsanimation bleiben unverändert;
 - IDF-6.1-Kompatibilität für `uart-uhci`;
 - lokales OTA-/WebSocket-Ziel.
 

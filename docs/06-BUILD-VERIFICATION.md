@@ -164,3 +164,21 @@ Die neu gebauten Images sind ein **Buildnachweis**, aber nicht automatisch der
 Recovery-Anker. Das Gerät läuft mit den unter `firmware/prebuilt/` abgelegten,
 praktisch bestätigten Images. Ein neu gebautes Image wird erst nach dem vollständigen
 Hardware-Testplan (`04-TESTPLAN.md`) zum neuen Recovery-Anker.
+
+## Finale deutsche Performance-Baseline (27.09.2026)
+
+Der aktuelle Patch wurde mit dem gepinnten Image `espressif/idf:v6.1`
+(Digest `sha256:81893c71bb5e570088901f21def8684c25cd2a9020281bd01b843a7655edb18c`)
+vollständig gebaut. Der Build endete mit 2182/2182 Schritten erfolgreich.
+
+| Feld | Wert |
+|---|---|
+| Sprache | `de-DE` (`CONFIG_LANGUAGE_DE_DE=y`) |
+| App-Größe | 2.906.160 B, 30 % Partition frei |
+| App-SHA256 | `4325094cd59b6dc7c5e615e7236ab3318aa69ed39d698972d9e23337a138010e` |
+| ELF-SHA256 | `77fd991a4856c6bef3c0dd3aa08d3f3ef650b06c74bd23087bb4aad553c91362` |
+| Vollimage-SHA256 | `9799d8533f419a745b1062dfbbf546a394945bcbd67ba5feda4961c207eab662` |
+
+Geflasht wurde ausschließlich die App-Partition bei `0x20000`. Der anschließende
+Read-back über exakt 2.906.160 Bytes war byteidentisch (`cmp=0`, gleicher SHA256).
+Der Owner bestätigte anschließend Funktion und keine bemerkbare Verzögerung.

@@ -113,10 +113,11 @@ Aus dem Boot-Log und dem App-Deskriptor des Geräts gelesen:
 |---|---|
 | Project | `xiaozhi` |
 | Version | `2.5.0` |
-| Compile time | **Sep 27 2026 08:12:48** |
-| ELF-SHA256 | `a7295b2bbb21005d…` |
-| ESP-IDF | `v6.1-803-g94639ab7251` |
+| Compile time | **Sep 27 2026 14:13:36** |
+| ELF-SHA256 | `77fd991a4856c6bef3c0dd3aa08d3f3ef650b06c74bd23087bb4aad553c91362` |
+| ESP-IDF | `v6.1` |
 | Board | `esp32-s3-touch-lcd-4b` |
+| Sprache | `de-DE` |
 
 Dieser Stand enthält den **Wiederherstellungs-Watchdog** und das animierte,
 board-spezifische OpenClaw-Gesicht (siehe `docs/02-FIRMWARE.md`). Der komplette
@@ -130,7 +131,7 @@ sie — nur Compile-Zeit und ELF-Hash.
 
 ## Wiederherstellungsanker
 
-`firmware/prebuilt/` enthält den aktuellen Stand:
+`firmware/prebuilt/` enthält den aktuellen, am Gerät bestätigten Stand:
 
 | Datei | Inhalt | Schreibziel |
 |---|---|---|
@@ -138,6 +139,7 @@ sie — nur Compile-Zeit und ELF-Hash.
 | `merged-binary.bin` | Vollständiges Image, **NVS auf `0xFF` geleert** | `0x0` (nur Rettungsfall) |
 | `previous-watchdog-smiley/xiaozhi.bin` | Vorheriger Watchdog-Stand mit statischem Smiley (`2d817b23…`) | `0x20000` |
 | `previous-no-watchdog/xiaozhi.bin` | Vorheriger bewährter Stand (`b6bf3e74…`), ohne Watchdog | `0x20000` |
+| `previous-face-v2-30fps/xiaozhi.bin` | Direkter Rückweg zum Gesicht vor der finalen LVGL-Optimierung | `0x20000` |
 
 Das NVS im Vollimage wurde bewusst geleert: Es enthält WLAN-Zugangsdaten im
 Klartext. Ein geflashtes Gerät muss danach neu provisoniert werden.

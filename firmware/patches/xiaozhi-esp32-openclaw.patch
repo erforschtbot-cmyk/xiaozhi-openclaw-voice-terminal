@@ -12,7 +12,7 @@ index d632aea..85a4e1e 100644
      "ota": Path("build/xiaozhi.bin"),
      "full": Path("build/merged-binary.bin"),
 diff --git a/main/application.cc b/main/application.cc
-index 31de205..7b109ba 100644
+index 31de205..48a9638 100644
 --- a/main/application.cc
 +++ b/main/application.cc
 @@ -210,11 +210,19 @@ void Application::Run() {
@@ -128,11 +128,26 @@ index 31de205..7b109ba 100644
  void Application::HandleNetworkConnectedEvent() {
      ESP_LOGI(TAG, "Network connected");
      auto state = GetDeviceState();
-@@ -624,10 +711,24 @@ void Application::InitializeProtocol() {
+@@ -551,8 +638,12 @@ void Application::InitializeProtocol() {
+         xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
+     });
+ 
+-    protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
++    protocol_->OnIncomingAudio([this, display](std::unique_ptr<AudioStreamPacket> packet) {
+         if (GetDeviceState() == kDeviceStateSpeaking) {
++            if (!tts_audio_started_) {
++                tts_audio_started_ = true;
++                display->OnAudioPlaybackStarted();
++            }
+             audio_service_.PushPacketToDecodeQueue(std::move(packet));
+         }
+     });
+@@ -624,10 +715,25 @@ void Application::InitializeProtocol() {
              if (strcmp(state->valuestring, "start") == 0) {
                  Schedule([this]() {
                      aborted_ = false;
 +                    tts_stream_end_pending_ = false;
++                    tts_audio_started_ = false;
                      SetDeviceState(kDeviceStateSpeaking);
                  });
 +            } else if (strcmp(state->valuestring, "stream_end") == 0) {
@@ -154,14 +169,33 @@ index 31de205..7b109ba 100644
                          if (listening_mode_ == kListeningModeManualStop) {
                              SetDeviceState(kDeviceStateIdle);
 diff --git a/main/application.h b/main/application.h
-index f2b9a00..1bc0bb9 100644
+index f2b9a00..6563548 100644
 --- a/main/application.h
 +++ b/main/application.h
-@@ -151,9 +151,15 @@ private:
+@@ -70,7 +70,7 @@ public:
+ 
+     DeviceState GetDeviceState() const { return state_machine_.GetState(); }
+     bool IsVoiceDetected() const { return audio_service_.IsVoiceDetected(); }
+-    
++
+     /**
+      * Request state transition
+      * Returns true if transition was successful
+@@ -118,7 +118,7 @@ public:
+     AecMode GetAecMode() const { return aec_mode_; }
+     void PlaySound(const std::string_view& sound);
+     AudioService& GetAudioService() { return audio_service_; }
+-    
++
+     /**
+      * Reset protocol resources (thread-safe)
+      * Can be called from any task to release resources allocated after network connected
+@@ -151,9 +151,16 @@ private:
      bool assets_version_checked_ = false;
      bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
      bool pending_listening_start_ = false;  // Waiting for playback to drain before starting listening (auto mode)
 +    bool tts_stream_end_pending_ = false;   // Server sent all audio; waiting for physical playback drain
++    bool tts_audio_started_ = false;        // First TTS audio packet reached the device
      int clock_ticks_ = 0;
      TaskHandle_t activation_task_handle_ = nullptr;
  
@@ -173,7 +207,7 @@ index f2b9a00..1bc0bb9 100644
  
      // Event handlers
      void HandleStateChangedEvent();
-@@ -164,6 +170,8 @@ private:
+@@ -164,6 +171,8 @@ private:
      void HandleNetworkDisconnectedEvent();
      void HandleActivationDoneEvent();
      void HandleWakeWordDetectedEvent();
@@ -182,6 +216,15 @@ index f2b9a00..1bc0bb9 100644
      void ContinueOpenAudioChannel(ListeningMode mode);
      void BeginWakeWordInvoke(const std::string& wake_word);
      void ContinueWakeWordInvoke(const std::string& wake_word);
+@@ -183,7 +192,7 @@ private:
+     void ShowActivationCode(const std::string& code, const std::string& message);
+     void SetListeningMode(ListeningMode mode);
+     ListeningMode GetDefaultListeningMode() const;
+-    
++
+     // State change handler called by state machine
+     void OnStateChanged(DeviceState old_state, DeviceState new_state);
+ };
 diff --git a/main/boards/common/wifi_board.cc b/main/boards/common/wifi_board.cc
 index 5b3721d..356bc82 100644
 --- a/main/boards/common/wifi_board.cc
@@ -327,10 +370,10 @@ index 9ab6535..067e313 100644
  
 diff --git a/main/boards/waveshare/esp32-s3-touch-lcd-4b/jarvis_face_display.cc b/main/boards/waveshare/esp32-s3-touch-lcd-4b/jarvis_face_display.cc
 new file mode 100644
-index 0000000..0efdb4e
+index 0000000..5611df1
 --- /dev/null
 +++ b/main/boards/waveshare/esp32-s3-touch-lcd-4b/jarvis_face_display.cc
-@@ -0,0 +1,341 @@
+@@ -0,0 +1,418 @@
 +#include "jarvis_face_display.h"
 +
 +#include "assets/lang_config.h"
@@ -343,7 +386,10 @@ index 0000000..0efdb4e
 +
 +namespace {
 +constexpr char TAG[] = "JarvisFace";
-+constexpr uint16_t kTickMs = 33;
++// 20 fps matches the existing RGB/LVGL service cadence and keeps the face
++// smooth without waking the small MCU roughly 30 times per second.
++constexpr uint16_t kTickMs = 50;
++constexpr uint32_t kFaceCyan = 0x53d7ff;
 +}
 +
 +JarvisFaceDisplay::JarvisFaceDisplay(esp_lcd_panel_io_handle_t panel_io,
@@ -371,7 +417,7 @@ index 0000000..0efdb4e
 +}
 +
 +void JarvisFaceDisplay::StartTween(Tween& tween, int32_t target, uint16_t duration_ms) {
-+    if (tween.to == target && tween.elapsed_ms < tween.duration_ms) {
++    if (tween.to == target) {
 +        return;
 +    }
 +    tween.from = tween.value;
@@ -398,6 +444,31 @@ index 0000000..0efdb4e
 +    CreateFace();
 +}
 +
++void JarvisFaceDisplay::SetTheme(Theme* theme) {
++    RgbLcdDisplay::SetTheme(theme);
++    DisplayLockGuard lock(this);
++    ApplyFaceOverlayStyle();
++}
++
++void JarvisFaceDisplay::ApplyFaceOverlayStyle() {
++    // LcdDisplay::SetTheme() deliberately reapplies the normal light theme to
++    // these objects. Restore the face overlay afterwards so status, transcript
++    // and answer text stay cyan on the black face canvas.
++    const lv_color_t face_cyan = lv_color_hex(kFaceCyan);
++    for (lv_obj_t* bar : {top_bar_, status_bar_, bottom_bar_}) {
++        if (bar != nullptr) {
++            lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);
++            lv_obj_set_style_border_opa(bar, LV_OPA_TRANSP, 0);
++        }
++    }
++    for (lv_obj_t* label : {network_label_, mute_label_, battery_label_, status_label_,
++                            notification_label_, chat_message_label_}) {
++        if (label != nullptr) {
++            lv_obj_set_style_text_color(label, face_cyan, 0);
++        }
++    }
++}
++
 +void JarvisFaceDisplay::CreateFace() {
 +    if (face_root_ != nullptr) {
 +        return;
@@ -413,18 +484,12 @@ index 0000000..0efdb4e
 +
 +    for (size_t i = 0; i < eyes_.size(); ++i) {
 +        eyes_[i] = lv_obj_create(face_root_);
-+        lids_[i] = lv_obj_create(face_root_);
-+        for (lv_obj_t* object : {eyes_[i], lids_[i]}) {
-+            lv_obj_remove_style_all(object);
-+            lv_obj_set_style_bg_opa(object, LV_OPA_COVER, 0);
-+            lv_obj_remove_flag(object, LV_OBJ_FLAG_CLICKABLE);
-+        }
++        lv_obj_remove_style_all(eyes_[i]);
++        lv_obj_set_style_bg_opa(eyes_[i], LV_OPA_COVER, 0);
++        lv_obj_remove_flag(eyes_[i], LV_OBJ_FLAG_CLICKABLE);
 +        lv_obj_set_style_radius(eyes_[i], 40, 0);
 +        lv_obj_set_style_transform_pivot_x(eyes_[i], lv_pct(50), 0);
 +        lv_obj_set_style_transform_pivot_y(eyes_[i], lv_pct(50), 0);
-+        lv_obj_set_style_bg_color(lids_[i], lv_color_black(), 0);
-+        lv_obj_set_style_radius(lids_[i], 8, 0);
-+        lv_obj_add_flag(lids_[i], LV_OBJ_FLAG_HIDDEN);
 +    }
 +
 +    mouth_arc_ = lv_arc_create(face_root_);
@@ -448,6 +513,10 @@ index 0000000..0efdb4e
 +    if (emoji_box_ != nullptr) {
 +        lv_obj_add_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
 +    }
++
++    // Keep the existing status/subtitle layout, but let the black face canvas
++    // show through instead of drawing the light theme's white translucent bars.
++    ApplyFaceOverlayStyle();
 +    for (lv_obj_t* overlay : {top_bar_, status_bar_, bottom_bar_, low_battery_popup_}) {
 +        if (overlay != nullptr) {
 +            lv_obj_move_foreground(overlay);
@@ -520,7 +589,10 @@ index 0000000..0efdb4e
 +    if (std::strcmp(status, Lang::Strings::LISTENING) == 0) {
 +        SetFaceState(FaceState::Listening);
 +    } else if (std::strcmp(status, Lang::Strings::SPEAKING) == 0) {
-+        SetFaceState(FaceState::Speaking);
++        // TTS "start" arrives before decoded PCM reaches the speaker. Show a
++        // thinking face during that short gap; the audio callback below starts
++        // the mouth exactly with physical playback.
++        SetFaceState(FaceState::Connecting);
 +    } else if (std::strcmp(status, Lang::Strings::CONNECTING) == 0) {
 +        SetFaceState(FaceState::Connecting);
 +    } else if (std::strcmp(status, Lang::Strings::STANDBY) == 0) {
@@ -528,8 +600,13 @@ index 0000000..0efdb4e
 +    }
 +}
 +
++void JarvisFaceDisplay::OnAudioPlaybackStarted() {
++    DisplayLockGuard lock(this);
++    SetFaceState(FaceState::Speaking);
++}
++
 +void JarvisFaceDisplay::ApplyMood(const char* emotion) {
-+    uint32_t color = 0x53d7ff;
++    uint32_t color = kFaceCyan;
 +    int32_t eye_h = face_state_ == FaceState::Listening ? 112 : 100;
 +    int32_t eye_w = face_state_ == FaceState::Listening ? 105 : 100;
 +    int32_t smile = 24;
@@ -629,60 +706,104 @@ index 0000000..0efdb4e
 +    const int32_t center_x = width_ / 2 + gaze_x_.value;
 +    const int32_t center_y = height_ * 40 / 100 + gaze_y_.value + breath;
 +    const int32_t gap = width_ * 19 / 100;
-+    const lv_color_t color = lv_color_make(red_.value, green_.value, blue_.value);
++    const uint32_t color_rgb = (static_cast<uint32_t>(red_.value) << 16) |
++                               (static_cast<uint32_t>(green_.value) << 8) |
++                               static_cast<uint32_t>(blue_.value);
++    if (color_rgb != rendered_color_) {
++        const lv_color_t color = lv_color_hex(color_rgb);
++        for (lv_obj_t* eye : eyes_) {
++            lv_obj_set_style_bg_color(eye, color, 0);
++        }
++        lv_obj_set_style_arc_color(mouth_arc_, color, LV_PART_MAIN);
++        for (lv_obj_t* bar : mouth_bars_) {
++            lv_obj_set_style_bg_color(bar, color, 0);
++        }
++        rendered_color_ = color_rgb;
++    }
 +
 +    for (size_t i = 0; i < eyes_.size(); ++i) {
 +        const int32_t x = center_x + (i == 0 ? -gap : gap) - eye_w / 2;
-+        lv_obj_set_size(eyes_[i], eye_w, eye_h);
-+        lv_obj_set_pos(eyes_[i], x, center_y - eye_h / 2);
-+        lv_obj_set_style_bg_color(eyes_[i], color, 0);
-+        const int32_t tilt = smile_.value / 3;
-+        lv_obj_set_style_transform_rotation(eyes_[i], i == 0 ? tilt : -tilt, 0);
++        const int32_t y = center_y - eye_h / 2;
++        if (rendered_eye_w_[i] != eye_w || rendered_eye_h_[i] != eye_h) {
++            lv_obj_set_size(eyes_[i], eye_w, eye_h);
++            rendered_eye_w_[i] = eye_w;
++            rendered_eye_h_[i] = eye_h;
++        }
++        if (rendered_eye_x_[i] != x || rendered_eye_y_[i] != y) {
++            lv_obj_set_pos(eyes_[i], x, y);
++            rendered_eye_x_[i] = x;
++            rendered_eye_y_[i] = y;
++        }
++    }
++    const int32_t tilt = smile_.value / 3;
++    if (tilt != rendered_tilt_) {
++        lv_obj_set_style_transform_rotation(eyes_[0], tilt, 0);
++        lv_obj_set_style_transform_rotation(eyes_[1], -tilt, 0);
++        rendered_tilt_ = tilt;
 +    }
 +
 +    const int32_t mouth_y = height_ * 69 / 100;
 +    if (face_state_ == FaceState::Speaking) {
-+        lv_obj_add_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
++        if (rendered_mouth_mode_ != 1) {
++            lv_obj_add_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
++            for (lv_obj_t* bar : mouth_bars_) {
++                lv_obj_remove_flag(bar, LV_OBJ_FLAG_HIDDEN);
++            }
++            rendered_mouth_mode_ = 1;
++        }
 +        for (size_t i = 0; i < mouth_bars_.size(); ++i) {
 +            const uint32_t phase = tick_count_ * (i + 2) + i * 7;
 +            const int32_t h = 12 + static_cast<int32_t>((phase * 17 + phase * phase) % 48);
 +            const int32_t w = 30 - h / 8;
-+            lv_obj_remove_flag(mouth_bars_[i], LV_OBJ_FLAG_HIDDEN);
-+            lv_obj_set_size(mouth_bars_[i], w, h);
-+            lv_obj_set_pos(mouth_bars_[i], width_ / 2 + (static_cast<int32_t>(i) - 1) * 58 - w / 2,
-+                           mouth_y - h / 2);
-+            lv_obj_set_style_bg_color(mouth_bars_[i], color, 0);
++            const int32_t x = width_ / 2 + (static_cast<int32_t>(i) - 1) * 58 - w / 2;
++            const int32_t y = mouth_y - h / 2;
++            if (rendered_bar_w_[i] != w || rendered_bar_h_[i] != h) {
++                lv_obj_set_size(mouth_bars_[i], w, h);
++                rendered_bar_w_[i] = w;
++                rendered_bar_h_[i] = h;
++            }
++            if (rendered_bar_x_[i] != x || rendered_bar_y_[i] != y) {
++                lv_obj_set_pos(mouth_bars_[i], x, y);
++                rendered_bar_x_[i] = x;
++                rendered_bar_y_[i] = y;
++            }
 +        }
 +    } else {
-+        for (lv_obj_t* bar : mouth_bars_) {
-+            lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
++        if (rendered_mouth_mode_ != 0) {
++            for (lv_obj_t* bar : mouth_bars_) {
++                lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
++            }
++            lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
++            rendered_mouth_mode_ = 0;
 +        }
 +        int32_t curve = smile_.value;
 +        if (curve > -8 && curve < 8) curve = curve < 0 ? -8 : 8;
-+        const int32_t diameter = 300 - std::abs(curve);
-+        lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
-+        lv_obj_set_size(mouth_arc_, diameter, diameter);
-+        if (curve > 0) {
-+            lv_arc_set_bg_angles(mouth_arc_, 55, 125);
-+            lv_obj_set_pos(mouth_arc_, width_ / 2 - diameter / 2, mouth_y - diameter + 22);
-+        } else {
-+            lv_arc_set_bg_angles(mouth_arc_, 235, 305);
-+            lv_obj_set_pos(mouth_arc_, width_ / 2 - diameter / 2, mouth_y - 22);
++        if (curve != rendered_curve_) {
++            const int32_t diameter = 300 - std::abs(curve);
++            lv_obj_set_size(mouth_arc_, diameter, diameter);
++            if (curve > 0) {
++                lv_arc_set_bg_angles(mouth_arc_, 55, 125);
++                lv_obj_set_pos(mouth_arc_, width_ / 2 - diameter / 2, mouth_y - diameter + 22);
++            } else {
++                lv_arc_set_bg_angles(mouth_arc_, 235, 305);
++                lv_obj_set_pos(mouth_arc_, width_ / 2 - diameter / 2, mouth_y - 22);
++            }
++            rendered_curve_ = curve;
 +        }
-+        lv_obj_set_style_arc_color(mouth_arc_, color, LV_PART_MAIN);
 +    }
 +}
 diff --git a/main/boards/waveshare/esp32-s3-touch-lcd-4b/jarvis_face_display.h b/main/boards/waveshare/esp32-s3-touch-lcd-4b/jarvis_face_display.h
 new file mode 100644
-index 0000000..986ba0a
+index 0000000..d326bfa
 --- /dev/null
 +++ b/main/boards/waveshare/esp32-s3-touch-lcd-4b/jarvis_face_display.h
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,85 @@
 +#pragma once
 +
 +#include "display/lcd_display.h"
 +
 +#include <array>
++#include <climits>
 +#include <cstdint>
 +#include <string>
 +
@@ -694,8 +815,10 @@ index 0000000..986ba0a
 +    ~JarvisFaceDisplay() override;
 +
 +    void SetupUI() override;
++    void SetTheme(Theme* theme) override;
 +    void SetStatus(const char* status) override;
 +    void SetEmotion(const char* emotion) override;
++    void OnAudioPlaybackStarted() override;
 +
 +private:
 +    enum class FaceState : uint8_t { Idle, Connecting, Listening, Speaking };
@@ -714,6 +837,7 @@ index 0000000..986ba0a
 +    static void StepTween(Tween& tween, uint16_t dt_ms);
 +
 +    void CreateFace();
++    void ApplyFaceOverlayStyle();
 +    void Tick();
 +    void SetFaceState(FaceState state);
 +    void ApplyMood(const char* emotion);
@@ -722,7 +846,6 @@ index 0000000..986ba0a
 +
 +    lv_obj_t* face_root_ = nullptr;
 +    std::array<lv_obj_t*, 2> eyes_{};
-+    std::array<lv_obj_t*, 2> lids_{};
 +    lv_obj_t* mouth_arc_ = nullptr;
 +    std::array<lv_obj_t*, 3> mouth_bars_{};
 +    lv_timer_t* face_timer_ = nullptr;
@@ -743,7 +866,51 @@ index 0000000..986ba0a
 +    uint8_t blink_phase_ = 0;
 +    uint32_t tick_count_ = 0;
 +    uint32_t rng_ = 0x9d2c5680;
++
++    // Last values actually submitted to LVGL. Geometry setters already reject
++    // equal values internally, but style setters do not: they refresh styles
++    // and invalidate the object even when the value is unchanged.
++    uint32_t rendered_color_ = UINT32_MAX;
++    int32_t rendered_tilt_ = INT32_MIN;
++    int32_t rendered_curve_ = INT32_MIN;
++    int8_t rendered_mouth_mode_ = -1;
++    std::array<int32_t, 2> rendered_eye_x_{INT32_MIN, INT32_MIN};
++    std::array<int32_t, 2> rendered_eye_y_{INT32_MIN, INT32_MIN};
++    std::array<int32_t, 2> rendered_eye_w_{INT32_MIN, INT32_MIN};
++    std::array<int32_t, 2> rendered_eye_h_{INT32_MIN, INT32_MIN};
++    std::array<int32_t, 3> rendered_bar_x_{INT32_MIN, INT32_MIN, INT32_MIN};
++    std::array<int32_t, 3> rendered_bar_y_{INT32_MIN, INT32_MIN, INT32_MIN};
++    std::array<int32_t, 3> rendered_bar_w_{INT32_MIN, INT32_MIN, INT32_MIN};
++    std::array<int32_t, 3> rendered_bar_h_{INT32_MIN, INT32_MIN, INT32_MIN};
 +};
+diff --git a/main/display/display.h b/main/display/display.h
+index e7fa6fa..72d7256 100644
+--- a/main/display/display.h
++++ b/main/display/display.h
+@@ -44,6 +44,9 @@ public:
+     virtual void ShowNotification(const char* notification, int duration_ms = 3000);
+     virtual void ShowNotification(const std::string& notification, int duration_ms = 3000);
+     virtual void SetEmotion(const char* emotion);
++    // Visual-only hook fired when the first TTS audio packet reaches the
++    // device. Displays that do not animate speech ignore it.
++    virtual void OnAudioPlaybackStarted() {}
+     virtual void SetChatMessage(const char* role, const char* content);
+     virtual void ClearChatMessages();
+     virtual void SetTheme(Theme* theme);
+diff --git a/main/display/lcd_display.cc b/main/display/lcd_display.cc
+index 3462ac0..f8a20b6 100644
+--- a/main/display/lcd_display.cc
++++ b/main/display/lcd_display.cc
+@@ -229,7 +229,8 @@ RgbLcdDisplay::RgbLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
+     ESP_LOGI(TAG, "Initialize LVGL port");
+     lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
+     port_cfg.task_priority = 1;
+-    port_cfg.timer_period_ms = 50;
++    port_cfg.task_affinity = 1;
++    port_cfg.timer_period_ms = 5;
+     lvgl_port_init(&port_cfg);
+ 
+     ESP_LOGI(TAG, "Adding LCD display");
 diff --git a/main/idf_component.yml b/main/idf_component.yml
 index 2473f56..17d0797 100644
 --- a/main/idf_component.yml

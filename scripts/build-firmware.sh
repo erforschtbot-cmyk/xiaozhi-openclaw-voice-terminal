@@ -50,7 +50,7 @@ PY
 
 image="xiaozhi-openclaw-builder:esp-idf61"
 "${docker_cmd[@]}" build \
-  --build-arg IDF_IMAGE=espressif/idf:release-v6.1 \
+  --build-arg IDF_IMAGE=espressif/idf:v6.1 \
   --build-arg FIRMWARE_SOURCE_REVISION=4632dc51f0a5ad26e08542e131e6e48da41e4ff3-openclaw \
   -f "$source_dir/docker/firmware-builder/Dockerfile" \
   -t "$image" "$source_dir"
