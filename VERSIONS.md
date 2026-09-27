@@ -1,6 +1,6 @@
 # Verbindliche Versionen
 
-Diese Werte sind der **Ist-Stand vom 2026-09-26** auf dem Referenzhost.
+Diese Werte sind der **Ist-Stand vom 2026-09-27** auf dem Referenzhost.
 
 | Komponente | Version / Pin |
 |---|---|
@@ -14,8 +14,8 @@ Diese Werte sind der **Ist-Stand vom 2026-09-26** auf dem Referenzhost.
 | Bridge-Python-Pakete | `websockets==15.0.1`, `opuslib==3.0.1` |
 | Realtime-Modell | `gpt-live-1-codex` |
 | Stimme | `cove` |
-| Talk-Session-Key | `agent:voice:xiaozhi-realtime-v5` |
-| Talk-Consult-Key | `agent:allgemein:xiaozhi-realtime-v5` |
+| Talk-Session-Key | `agent:voice:xiaozhi-realtime-v5` (konstant, ohne UUID-Anhang) |
+| Talk-Consult-Key | `agent:allgemein:xiaozhi-realtime-v5` (konstant, ohne UUID-Anhang) |
 
 ## Laufende Firmware (Geräte-Ist-Stand)
 

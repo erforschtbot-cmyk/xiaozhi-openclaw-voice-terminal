@@ -32,7 +32,7 @@ Waveshare ESP32-S3-Touch-LCD-4B
           ↓
 Python-Bridge  (server.py, systemd: jarvis-realtime-bridge.service)
   ├─ Opus-Audio zum/vom Gerät, Nachhör-Fenster, OTA auf :8766
-  └─ startet pro Äußerung: node openclaw-talk-realtime.mjs
+  └─ startet Helfer: node openclaw-talk-realtime.mjs (konstante Session-Schlüssel)
           ↓
 OpenClaw Gateway  (wss://127.0.0.1:18789)
   └─ Talk / OpenAI GPT-Live (gpt-live-1-codex, Stimme cove)
@@ -45,8 +45,43 @@ OpenClaw-Werkzeuge, Skills, Hostzugriff
 **Zwei Skripte, klar getrennt:**
 
 1. `gateway/server.py` — dauerhafter WebSocket-Server auf Port 8765/8766.
-2. `gateway/openclaw-talk-realtime.mjs` — Kindprozess von `server.py`, wird **pro
-   Äußerung** neu gestartet, verbindet zum Gateway.
+2. `gateway/openclaw-talk-realtime.mjs` — Kindprozess von `server.py`. Pro Äußerung
+   wird ein Helfer gestartet/weiterverwendet; er verbindet zum Gateway. Der
+   **Talk-Session-Schlüssel ist dabei konstant** (siehe unten), sodass alle
+   Äußerungen in **derselben** OpenClaw-Session landen.
+
+## Dauerhafte Talk-Sitzung (Ist-Stand 27.09.2026)
+
+`server.py` setzt seit dem 27.09.2026 **konstante** Schlüssel:
+
+```python
+OPENCLAW_TALK_SESSION_KEY    = self.args.session_key        # agent:voice:xiaozhi-realtime-v5
+OPENCLAW_TALK_CONSULT_SESSION_KEY = self.args.consult_session_key  # agent:allgemein:xiaozhi-realtime-v5
+```
+
+Vorher hing an beiden Schlüsseln eine UUID (`…-{turn_id}` bzw. `…-{session_id}`).
+Damit wurde für **jede** Äußerung beziehungsweise **jeden** Werkzeug-Aufruf eine
+frische Session aufgebaut.
+
+Folgen des Wechsels auf konstante Schlüssel (belegt im Betrieb):
+
+- **Werkzeug-Antworten kommen spürbar schneller** (näher an Alexa): die Sitzung
+  bleibt warm, der Prompt-Cache greift (`cacheRead` in den Tool-Turns), es entfällt
+  der Aufbau einer neuen Session pro Frage.
+- **Kein `SqliteTranscriptMutationConflictError` mehr** auf frischen Transkripten,
+  weil Zwischenansage und Consult nicht länger gegen ein neues Transkript laufen.
+- **Kein Wachstum an `xiaozhi-realtime-v5-…`-Sessions pro Werkzeugfrage** durch den
+  Session-Schlüssel selbst (neue Session-IDs entstehen nur noch über den
+  Geräte-Reconnect, siehe `docs/05-FEHLERSUCHE.md`).
+
+Zum Zurücksetzen des Experiments: in `server.py` die beiden Zuweisungen wieder auf
+`f"{self.args.session_key}-{self.turn_id}"` und
+`f"{self.args.consult_session_key}-{self.session_id}"` setzen.
+
+Ergänzend wurde `is_interim_text()` von einem Präfix-Vergleich (`startswith`) auf
+eine **geschlossene Liste reiner Zwischenansagen** umgestellt. Eine zu einer
+Nachricht verwachsene Zwischenansage+Antwort („I’ll check that request. Es ist 01:02
+Uhr.“) erhält dadurch korrekt `stream_end`; siehe `docs/05-FEHLERSUCHE.md`.
 
 Die Firmware enthält **keinen OpenAI-Schlüssel**. Anmeldung und Schlüssel bleiben
 auf dem OpenClaw-Host.

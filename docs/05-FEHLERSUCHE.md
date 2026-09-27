@@ -109,6 +109,28 @@ Bridge wartet 2 s und bricht dann hart ab (`transport.abort()`). Folge: pro Antw
 entsteht eine neue Voice-Session. Kein Fehler, aber es erklärt, warum so viele
 Session-IDs auflaufen.
 
+## Sehr viele `xiaozhi-realtime-v5-…`-Sessions (Ist-Stand 27.09.2026)
+
+Zwei getrennte Ursachen nicht verwechseln:
+
+- **Behoben:** Der Talk- und der Consult-Schlüssel enthielten früher eine UUID
+  (`…-{turn_id}` / `…-{session_id}`). Dadurch erzeugte **jeder Werkzeug-Consult**
+  eine eigene Session. Seit dem 27.09.2026 sind beide Schlüssel **konstant**
+  (siehe `README.md`, „Dauerhafte Talk-Sitzung“); Werkzeugfragen wachsen nicht mehr
+  als neue Session-Kennungen auf.
+- **Erwartet und weiter vorhanden:** Nach jeder Antwort bricht die Bridge die
+  WebSocket-Verbindung ab und das Gerät verbindet neu (siehe oben). Pro Antwort
+  entsteht dadurch weiterhin eine neue Session-ID. Das ist kein Fehler.
+
+Nebeneffekt der konstanten Schlüssel: Werkzeug-Antworten sind deutlich schneller,
+weil die Sitzung warm bleibt und der Prompt-Cache greift.
+
+## Werkzeug-Antwort plötzlich viel schneller (Ist-Stand 27.09.2026)
+
+Kein Zufall: `gateway/server.py` verwendet **konstante** Talk-/Consult-Schlüssel.
+Statt pro Frage eine neue Session aufzubauen, läuft alles in einer warmen Session;
+im Tool-Turn ist `cacheRead` gesetzt. Belege und Rückweg stehen in `README.md`.
+
 ## Antwortanfang oder -ende abgeschnitten
 
 Keine pauschalen Startpuffer oder langen Audio-Silence-Timer ergänzen. Frühere
