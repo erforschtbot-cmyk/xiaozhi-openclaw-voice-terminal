@@ -220,3 +220,17 @@ Der Build meldet für einige Upstream-Kconfig-Optionen „`default False` is not
 valid bool value … Value is treated as 'n'". Das ist ein Schönheitsfehler der
 Upstream-Dateien und hat keine Auswirkung — der Build läuft mit `exit_code 0`
 durch.
+
+### Der Ton beim Aktivieren
+
+Mit dem Schalter nimmt die Firmware den `#else`-Zweig in `OnWakeWordDetected`,
+der `play_popup_on_listening_ = true` setzt. `EnableVoiceProcessing` spielt dann
+`OGG_POPUP`. Vorher lief der `#if`-Zweig, der das Wachwort-Audio sendet — deshalb
+war kein Ton zu hören.
+
+Er erklingt genau in dem Moment, in dem das Mikrofon aufgeht, und markiert damit
+den echten Beginn des Zuhörens (die Anzeige „Zuhören“ tut das nicht, siehe
+`docs/05-FEHLERSUCHE.md`).
+
+Eine Kconfig-Option zum Abschalten gibt es **nicht** (alle `Kconfig*` geprüft).
+Abschalten würde eine Patch-Änderung plus Neu-Build erfordern. Bewusst gelassen.

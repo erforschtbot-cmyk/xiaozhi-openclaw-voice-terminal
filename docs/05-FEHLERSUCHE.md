@@ -35,11 +35,54 @@ Schreiber und der Consult wird vor dem Werkzeugaufruf verworfen.
 
 Die Session ist dabei **nicht** beschädigt — der Turn wird atomar verworfen.
 
-## Anzeige „Zuhören", aber keine Folgeäußerung wird erkannt
+## Anzeige „Zuhören“, aber keine Folgeäußerung wird erkannt
 
 Audio-Turn und Talk-Session dürfen nicht blind gekoppelt werden. Der bestätigte
 Stand hält bei einer Werkzeug-Rückfrage dieselbe Talk-Session offen und öffnet nach
 physischem `playback_drained` den Eingang erneut. Keine Timer auf Verdacht ändern.
+
+## Erster Satz geht verloren — man muss alles zweimal sagen
+
+Symptom: Direkt nach dem Wachwort gesprochene Sätze kommen nicht an. Wer dagegen
+wartet, bis „Zuhören“ steht **plus etwa eine Sekunde**, wird immer verstanden.
+Es wirkt zufällig, ist aber ein Wettlauf.
+
+Ursache: Der Helfer (Talk-Sitzung des Providers) wurde erst mit dem **ersten
+Mikrofonpaket** gestartet. Er braucht vom Start bis `ready` rund **2–3 s**:
+
+```text
+16:05:17  Gerät verbunden          →  Anzeige „Zuhören“
+16:05:19  Mikrofon-Paket 25        →  läuft schon, aber niemand hört zu
+16:05:28  Helfer bereit            →  erst JETZT wird wirklich zugehört
+```
+
+Die Anzeige „Zuhören“ bedeutete in dieser Zeit **nicht**, dass zugehört wird.
+
+Maßnahme: `prewarm_realtime()` in `gateway/server.py` startet den Helfer bereits
+beim `hello` (Kanalaufbau) statt beim ersten Paket:
+
+```text
+XiaoZhi connected from ...
+Prewarm: starting talk helper before first microphone packet
+Prewarm: helper ready after 2.66s
+```
+
+Absicherungen, die dazugehören:
+
+- `helper_starting` verhindert, dass `hello` und das erste Paket zwei Helfer starten.
+- `feed_opus` prüft `self.process` vor dem Zugriff. Vorher war der Prozess durch
+  das Start-Await garantiert gesetzt; mit dem Vorwärmen kann `start_realtime()`
+  sofort zurückkehren, dann wäre `self.process` noch `None`.
+- Die Firmware meldet bei jedem Wechsel ihren echten Zustand
+  (`{"type":"device","event":"state","state":…}`). Die Bridge protokolliert das
+  jetzt als `Device state: …`; vorher war sie dafür blind.
+
+### Der Ton beim Aktivieren ist gewollt
+
+Mit abgeschaltetem Wachwort-Audio (`CONFIG_SEND_WAKE_WORD_DATA=n`, siehe
+`docs/02-FIRMWARE.md`) spielt die Firmware bei jedem Wachwort einen kurzen Ton.
+Er erklingt genau, wenn das Mikrofon wirklich aufgeht — er markiert also den
+echten Beginn des Zuhörens. Deshalb ist er kein Fehler.
 
 ## „Sprechen" oder „Zuhören" bleibt hängen
 
