@@ -1,8 +1,20 @@
 # Jarvis: Waveshare XiaoZhi als OpenClaw-Sprachterminal
 
-Dieses private Repository enthält **alle projektspezifischen Dateien und Anleitungen**,
+Dieses Repository enthält **alle projektspezifischen Dateien und Anleitungen**,
 um das funktionierende Jarvis-System auf einem leeren Linux-/OpenClaw-Host exakt
 wiederherzustellen — so, wie es am **2026-09-27** auf dem Referenzhost läuft.
+
+> **Variante: Cloud (Realtime-Stimme).** Hören/Denken/Sprechen laufen über ein
+> OpenAI-Realtime-Modell (`gpt-live-1-codex`, Stimme `cove`).
+>
+> Die **komplett lokale Variante** (Erkennung mit Whisper, Stimme mit Piper, kein
+> Audio an die Cloud) steht in
+> [`erforschtbot-cmyk/xiaozhi-openclaw-local-voice`](https://github.com/erforschtbot-cmyk/xiaozhi-openclaw-local-voice).
+> Die **Firmware ist in beiden Repos identisch** — es unterscheidet sich nur die
+> Host-Konfiguration.
+
+Anleitung für Menschen und KI-Agenten (Aufbau, Test, Fehlersuche):
+[Forum-Beitrag](https://www.erforscht.com/forum/index.php?thread/501-anleitung-xiaozhi-jarvis-als-openclaw-sprachterminal-cloud-lokal/).
 
 ## Was hier drin ist
 
