@@ -1,6 +1,6 @@
 # Verbindliche Versionen
 
-Diese Werte sind der **Ist-Stand vom 2026-09-27** auf dem Referenzhost.
+Diese Werte sind der **Ist-Stand vom 2026-09-28** auf dem Referenzhost.
 
 | Komponente | Version / Pin |
 |---|---|
@@ -23,10 +23,19 @@ Diese Werte sind der **Ist-Stand vom 2026-09-27** auf dem Referenzhost.
 |---|---|
 | Project | `xiaozhi` |
 | Version | `2.5.0` |
-| Compile time | `Sep 27 2026 14:13:36` (de-DE, Watchdog + optimiertes animiertes Gesicht) |
-| ELF-SHA256 | `77fd991a4856c6bef3c0dd3aa08d3f3ef650b06c74bd23087bb4aad553c91362` |
+| Compile time | `Sep 28 2026 13:08:52` (de-DE, Wachwort-Audio abgeschaltet) |
+| ELF-SHA256 | `c30048b5f32545b3d596fb45089a0ab2e0db6b29d94cefdd724f023e11f937cd` |
 | ESP-IDF | `v6.1` |
 | Geräte-MAC | `94:a9:90:cc:8d:b4` |
+
+Dieser Stand liegt als `firmware/prebuilt/xiaozhi.bin` im Repo. Er enthält
+zusätzlich den Eingriff, dass das **Wachwort-Audio nicht mehr an den Server**
+geschickt wird (`CONFIG_SEND_WAKE_WORD_DATA=n`, siehe `docs/02-FIRMWARE.md`).
+Mikrofon, Erkennung und Mithören sind davon nicht betroffen.
+
+Direkter Rückweg — der Stand **vor** diesem Eingriff:
+`Sep 27 2026 14:13:36`, ELF `77fd991a4856c6bef3c0dd3aa08d3f3ef650b06c74bd23087bb4aad553c91362`
+(`firmware/prebuilt/previous/xiaozhi.bin`).
 
 Direkter Rückweg zum vorherigen Watchdog-Stand mit statischem Smiley:
 `Sep 26 2026 19:10:55`, ELF `2d817b23a349060d`

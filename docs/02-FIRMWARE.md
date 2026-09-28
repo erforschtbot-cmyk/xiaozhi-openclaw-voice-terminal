@@ -68,6 +68,8 @@ Die Firmware-Patches enthalten:
   Lid-Objekte sowie LVGL auf Kern 1 mit 5-ms-Zeitbasis; Zustände und sichtbare
   50-ms-Gesichtsanimation bleiben unverändert;
 - IDF-6.1-Kompatibilität für `uart-uhci`;
+- **Wachwort-Audio wird nicht mehr an den Server geschickt**
+  (`CONFIG_SEND_WAKE_WORD_DATA=n`, siehe unten);
 - lokales OTA-/WebSocket-Ziel.
 
 ## Animiertes Gesicht ohne Architekturwechsel
@@ -142,3 +144,79 @@ Der bestätigte funktionierende Komplettstand wurde aus einer funktionierenden
 Basis aufgebaut. Frühere vollständige Neubauten konnten Mikrofon/Audio verlieren.
 Darum ist das verifizierte Image der Recovery-Anker; neue Builds müssen erst den
 vollständigen Testplan bestehen.
+
+Deshalb gilt bei **jeder** Firmware-Änderung: den bisherigen Stand nach
+`firmware/prebuilt/previous/` verschieben, bevor er ersetzt wird, und den neuen
+ELF-Hash in `VERSIONS.md` vermerken.
+
+## Wachwort-Audio nicht mehr mitsenden
+
+Einziger zusätzlicher Eingriff gegenüber dem Watchdog-Stand.
+
+Das Gerät öffnet den Audiokanal erst nach dem Wachwort. Je nach Zeitpunkt liegen
+die ersten Rahmen noch davor — das Wachwort steckt dann mit im Transkript
+(„Jarvis.“, „Job es.“). Der Host filtert das zwar nachträglich, aber besser ist,
+die Rahmen gar nicht erst zu verschicken.
+
+Die Ursprungsfirmware sendet das Wachwort-Audio (`main/application.cc`):
+
+```c
+#if CONFIG_SEND_WAKE_WORD_DATA
+    while (auto packet = audio_service_.PopWakeWordPacket()) {
+        protocol_->SendAudio(std::move(packet));   // <- die stoerenden Rahmen
+    }
+    protocol_->SendWakeWordDetected(wake_word);
+    SetListeningMode(GetDefaultListeningMode());
+#else
+    play_popup_on_listening_ = true;
+    SetListeningMode(GetDefaultListeningMode());
+#endif
+```
+
+Upstream-Standard ist `y`; deshalb sendete das Referenzgerät die Rahmen.
+
+| Betroffen? | |
+|---|---|
+| Mikrofon | **nein** |
+| I2S / Audio-Codec | **nein** |
+| Wachwort-Erkennung (ESP-SR) | **nein** — läuft vor dem `#if`, in beiden Zweigen |
+| Mithören (`SetListeningMode`) | **nein** — steht in beiden Zweigen |
+| Gesendete Rahmen | **nur das** |
+
+Der `#else`-Zweig ist ein vorgesehener Weg, kein Notbehelf. Der Host hängt nicht
+an `SendWakeWordDetected`; die Bridge startet ihren Helfer über den
+`listen`-Status.
+
+Gesetzt wird der Schalter in der Board-Konfiguration im Patch
+(`firmware/patches/xiaozhi-esp32-openclaw.patch`), über `sdkconfig_append`:
+
+```json
+"sdkconfig_append": [
+    "CONFIG_USE_WECHAT_MESSAGE_STYLE=n",
+    "CONFIG_USE_DEVICE_AEC=y",
+    "CONFIG_OTA_URL=\"http://192.168.178.143:8766/xiaozhi/ota/\"",
+    "CONFIG_SEND_WAKE_WORD_DATA=n"
+]
+```
+
+### Prüfen
+
+```bash
+sudo python3 scripts/read-device-info.py --port /dev/ttyACM0
+# erwartet: compile 13:08:52 Sep 28 2026
+#           elf-sha256 c30048b5f32545b3d596fb45089a0ab2e0db6b29d94cefdd724f023e11f937cd
+```
+
+### Rückweg
+
+```bash
+esptool --chip esp32s3 --port /dev/ttyACM0 write-flash 0x20000 \
+  firmware/prebuilt/previous/xiaozhi.bin
+```
+
+### Hinweis zu Build-Warnungen
+
+Der Build meldet für einige Upstream-Kconfig-Optionen „`default False` is not a
+valid bool value … Value is treated as 'n'". Das ist ein Schönheitsfehler der
+Upstream-Dateien und hat keine Auswirkung — der Build läuft mit `exit_code 0`
+durch.
