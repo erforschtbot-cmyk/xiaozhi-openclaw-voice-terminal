@@ -27,7 +27,7 @@ Anleitung für Menschen und KI-Agenten (Aufbau, Test, Fehlersuche):
 | Aufgelöste Abhängigkeiten des Firmware-Builds | `firmware/dependencies.lock` |
 | Bridge-Skript 1 (Python, WebSocket-Server) | `gateway/server.py` |
 | Bridge-Skript 2 (Node, Gateway-Helper) | `gateway/openclaw-talk-realtime.mjs` |
-| OpenClaw-`dist`-Patches für den Voice-Pfad | `scripts/apply-openclaw-voice-dist-patches.py` |
+| OpenClaw-`dist`-Patches für den Voice-Pfad (**nur Notfall-Hilfe**) | `scripts/apply-openclaw-voice-dist-patches.py` |
 | systemd-Userdienst | `systemd/` |
 | Bau-/Flash-/Installationsskripte | `scripts/` |
 | Prüfsummen | `CHECKSUMS.sha256` |
@@ -103,7 +103,7 @@ auf dem OpenClaw-Host.
 
 1. [`docs/01-HOST-INSTALLATION.md`](docs/01-HOST-INSTALLATION.md)
 2. [`docs/02-FIRMWARE.md`](docs/02-FIRMWARE.md)
-3. [`docs/03-OPENCLAW-PATCH.md`](docs/03-OPENCLAW-PATCH.md)
+3. *(optional, nur bei Problemen)* [`docs/03-OPENCLAW-PATCH.md`](docs/03-OPENCLAW-PATCH.md)
 4. [`docs/04-TESTPLAN.md`](docs/04-TESTPLAN.md)
 5. [`docs/05-FEHLERSUCHE.md`](docs/05-FEHLERSUCHE.md)
 6. [`docs/06-BUILD-VERIFICATION.md`](docs/06-BUILD-VERIFICATION.md)
@@ -112,10 +112,15 @@ Für einen bereits eingerichteten Host genügt typischerweise:
 
 ```bash
 ./scripts/install-host.sh --public-host 192.168.178.143
-./scripts/apply-openclaw-voice-dist-patches.py
 ./scripts/verify-host.sh
 systemctl --user restart openclaw-gateway.service
 ```
+
+> **Zu `docs/03-OPENCLAW-PATCH.md`:** Die dort beschriebenen `dist`-Patches sind
+> **kein Pflichtschritt**. Der Voice-Betrieb funktioniert **ohne** sie. Sie sind
+> ausschließlich eine **Hilfe/Notfallmaßnahme** und werden **nur bei den dort
+> genannten konkreten Symptomen** angewendet — nicht routinemäßig, nicht nach
+> jedem Update. Kein Symptom → nichts tun.
 
 ## Bestätigte Firmware (Ist-Stand)
 
