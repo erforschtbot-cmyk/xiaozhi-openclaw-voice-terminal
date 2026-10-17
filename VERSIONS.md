@@ -11,6 +11,8 @@ Diese Werte sind der **Ist-Stand vom 2026-09-28** auf dem Referenzhost.
 | uart-uhci Upstream | `78/uart-uhci@6ea5f576af84640209aa6b98e27be92b8ce418c5` |
 | ESP-IDF Build-Image | `espressif/idf:v6.1` (Digest `sha256:81893c71bb5e570088901f21def8684c25cd2a9020281bd01b843a7655edb18c`) |
 | Board | Waveshare ESP32-S3-Touch-LCD-4B |
+| Zweites Gerät | Waveshare ESP32-S3-AUDIO-Board (SKU 32184/32185), kein Display, 7 RGB-Ring-LEDs |
+| Audio-Board-Boardziel | `waveshare/esp32-s3-audio-board` (im selben Upstream-Pin enthalten) |
 | Bridge-Python-Pakete | `websockets==15.0.1`, `opuslib==3.0.1` |
 | Realtime-Modell | `gpt-live-1-codex` |
 | Stimme | `cove` |
@@ -27,6 +29,30 @@ Diese Werte sind der **Ist-Stand vom 2026-09-28** auf dem Referenzhost.
 | ELF-SHA256 | `c30048b5f32545b3d596fb45089a0ab2e0db6b29d94cefdd724f023e11f937cd` |
 | ESP-IDF | `v6.1` |
 | Geräte-MAC | `94:a9:90:cc:8d:b4` |
+
+## Zweites Gerät: Audio-Board
+
+Dasselbe Bridge-, Gateway- und Host-Setup wie oben; es unterscheidet sich nur die
+Firmware. Vollständige Anleitung: `docs/07-AUDIO-BOARD.md`.
+
+| Merkmal | Wert |
+|---|---|
+| Gerät | Waveshare ESP32-S3-AUDIO-Board (SKU 32184/32185) |
+| Chip | ESP32-S3R8, 16 MB Flash, 8 MB PSRAM |
+| Audio | ES8311 (DAC), ES7210 (Dual-Mic) |
+| Anzeige | **kein Display** — 7 RGB-Ring-LEDs (WS2812, GPIO 38) |
+| Boardziel | `waveshare/esp32-s3-audio-board` |
+| Patch | `firmware/patches/jarvis-audio-board-ring.patch` |
+| Sprache / Wakeword | `de-DE` / `wn9_jarvis_tts` (wie 4B) |
+| Geräte-MAC | `90:70:69:eb:1e:b4` |
+| Laufende Firmware | `xiaozhi 2.5.0`, gebaut `Oct 17 2026 20:57:38` |
+| Veröffentlichter Anker | `firmware/prebuilt/audio-board/xiaozhi.bin` (App-Partition) |
+| Anker-SHA256 | `0336d2f036e03128710c2185115af92a537db28b86c34496330be360066da231` |
+
+Der Anker ist die **App-Partition** (2.830.576 B), nicht das Vollimage. Er
+enthält **keine** Zugangsdaten — WLAN-Name und -Passwort liegen ausschließlich in
+der NVS, die nicht im Repo ist. Das Image wird bei `0x20000` geschrieben, dann
+bleiben NVS und Assets unangetastet.
 
 Dieser Stand liegt als `firmware/prebuilt/xiaozhi.bin` im Repo. Er enthält
 zusätzlich den Eingriff, dass das **Wachwort-Audio nicht mehr an den Server**

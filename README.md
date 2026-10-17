@@ -24,6 +24,9 @@ Anleitung für Menschen und KI-Agenten (Aufbau, Test, Fehlersuche):
 | Board-spezifisches animiertes OpenClaw-Gesicht | im XiaoZhi-Patch unter `jarvis_face_display.*` |
 | Wiederherstellungs-Watchdog (im Firmware-Patch) | `firmware/patches/xiaozhi-esp32-openclaw.patch` |
 | Bestätigte Firmware-Images (Wiederherstellungsanker) | `firmware/prebuilt/` |
+| **Zweites Gerät: Audio-Board** (Ring-LED statt Display) | `firmware/audio-board/`, `docs/07-AUDIO-BOARD.md` |
+| Audio-Board-Patch (7 LEDs + RGB-Farbordnung) | `firmware/patches/jarvis-audio-board-ring.patch` |
+| Audio-Board-Anchor (nur App-Partition) | `firmware/prebuilt/audio-board/xiaozhi.bin` |
 | Aufgelöste Abhängigkeiten des Firmware-Builds | `firmware/dependencies.lock` |
 | Bridge-Skript 1 (Python, WebSocket-Server) | `gateway/server.py` |
 | Bridge-Skript 2 (Node, Gateway-Helper) | `gateway/openclaw-talk-realtime.mjs` |
