@@ -4,15 +4,44 @@ import asyncio
 import json
 import os
 import re
+import time
 import signal
 import uuid
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 import opuslib
 from websockets.asyncio.server import serve
 
+# Lokale Sprachausgabe. Das Modul wird nur importiert, wenn der lokale
+# TTS-Pfad aktiv ist; so bleibt der Provider-Pfad ohne Piper-Abhaengigkeit
+# lauffaehig, falls jemand Piper nicht installiert hat.
+try:
+    from piper_speaker import PiperSpeaker, find_default_voice
+except ImportError:  # pragma: no cover
+    PiperSpeaker = None  # type: ignore[assignment]
+    find_default_voice = None  # type: ignore[assignment]
+
 
 class XiaozhiSession:
+    ALEXA_TEXT_COMMAND_ENDPOINT = (
+        "http://192.168.178.24:8087/set/"
+        "alexa2.0.Echo-Devices.G6G2MM12449402WK.Commands.textCommand?value="
+    )
+    # Gemeinsame Dedupe-Zustandsdatei mit dem Agent-Wrapper
+    # (openclaw-voice-skill-action): derselbe Schaltbefehl wird innerhalb des
+    # Fensters nur einmal an Alexa geschickt, egal welcher Pfad zuerst kommt.
+    ALEXA_DEDUPE_STATE_PATH = (
+        "/home/openclaw/.local/share/jarvis-realtime-bridge/last-alexa-command.json"
+    )
+    ALEXA_DEDUPE_WINDOW_SECONDS = 8.0
+    # Modus-Schalter: liegt diese Datei vor, ist der Software-Direktpfad AUS
+    # und Smart-Home-Befehle gehen den offiziellen KI-Weg (Agent-Consult).
+    FASTPATH_DISABLE_FLAG = (
+        "/home/openclaw/.local/share/jarvis-realtime-bridge/disable-smart-home-fastpath"
+    )
+
     def __init__(self, websocket, args):
         self.websocket = websocket
         self.args = args
@@ -38,18 +67,39 @@ class XiaozhiSession:
         self.followup_audio_packets = 0
         self.followup_forwarded_packets = 0
         self.followup_peak = 0
+        self.followup_audio_guard_until = 0.0
         self.mcp_request_id = 0
         self.mcp_pending = {}
         self.mcp_ready = asyncio.Event()
-        # Vorwaermen: die Talk-Sitzung des Providers braucht vom Start bis
-        # "ready" rund 3 Sekunden (gemessen 2,66 s). Wird sie erst mit dem
-        # ersten Mikrofonpaket gestartet, ist der Nutzer mit seinem Satz
-        # laengst durch, bevor ueberhaupt zugehoert wird. Deshalb startet der
-        # Helfer schon beim Kanalaufbau (hello).
+        # Diagnosezaehler fuer den Mikrofonpegel (siehe feed_opus).
+        self.audio_packets = 0
+        self.audio_peak = 0
+        # Vorwaermen: der Sprachhelfer (Cloud-Talk-Sitzung) braucht vom Start
+        # bis "ready" rund 3 Sekunden. Wird er erst beim ersten Mikrofonpaket
+        # gestartet, ist der Nutzer mit seinem Satz laengst durch, bevor
+        # ueberhaupt zugehoert wird. Deshalb startet er schon beim
+        # Verbindungsaufbau (hello). `helper_starting` verhindert, dass zwei
+        # gleichzeitige Aufrufe (hello und erstes Paket) zwei Helfer starten.
         self.helper_ready = asyncio.Event()
         self.helper_starting = False
         self.helper_ready_at = 0.0
         self.helper_started_at = 0.0
+
+        # --- Lokale Sprachausgabe (Piper) -------------------------------
+        # `tts_local` schaltet den Pfad um: der Provider liefert dann nur
+        # noch Erkenung und Text; das gehoerte Audio wird verworfen und die
+        # Stimme entsteht lokal. Der Sprecher ist pro Prozess warm und wird
+        # von main() hereingereicht.
+        self.speaker = getattr(args, "speaker", None)
+        self.tts_local = self.speaker is not None
+        self.stt_local = getattr(args, "stt_local", False)
+        self.tts_text_buffer = ""
+        self.tts_queue = None
+        self.tts_worker_task = None
+        self.tts_pending = 0
+        self.tts_drain_event = asyncio.Event()
+        self.tts_drain_event.set()
+        self.local_pcm_bytes_sent = 0
 
     async def send_mcp_request(self, method, params, timeout=3.0):
         self.mcp_request_id += 1
@@ -105,17 +155,128 @@ class XiaozhiSession:
             raise RuntimeError(result)
         return result
 
+    @staticmethod
+    def _normalize_alexa_command(command):
+        collapsed = " ".join(command.strip().casefold().split())
+        return collapsed.strip(" .,!?;:…-–—")
+
+    def _alexa_already_sent(self, key):
+        if not key:
+            return False
+        try:
+            with open(self.ALEXA_DEDUPE_STATE_PATH, encoding="utf-8") as handle:
+                state = json.load(handle)
+        except (OSError, ValueError):
+            return False
+        if not isinstance(state, dict) or state.get("key") != key:
+            return False
+        try:
+            sent_at = float(state.get("ts"))
+        except (TypeError, ValueError):
+            return False
+        elapsed = time.time() - sent_at
+        return 0.0 <= elapsed < self.ALEXA_DEDUPE_WINDOW_SECONDS
+
+    def _alexa_record_sent(self, key):
+        if not key:
+            return
+        try:
+            os.makedirs(os.path.dirname(self.ALEXA_DEDUPE_STATE_PATH), exist_ok=True)
+            with open(self.ALEXA_DEDUPE_STATE_PATH, "w", encoding="utf-8") as handle:
+                json.dump({"key": key, "ts": time.time()}, handle)
+        except OSError:
+            pass
+
+    @staticmethod
+    def is_smart_home_fast_path(transcript):
+        # Modus "ki": Direktpfad bewusst abgeschaltet lassen.
+        if os.path.exists(
+            "/home/openclaw/.local/share/jarvis-realtime-bridge/disable-smart-home-fastpath"
+        ):
+            return False
+        normalized = " ".join(transcript.lower().replace("%", " prozent ").split())
+        # German compounds are common device names ("Deckenventilator",
+        # "Kuechenlampe"). Match the target as a word SUFFIX so prefixed
+        # compounds hit the fast path instead of the slow cloud consult.
+        smart_home_target = (
+            r"[a-z\u00e4\u00f6\u00fc\u00df-]*"
+            r"(?:monitor|licht|lampe|steckdose|jalousie|rollladen|"
+            r"heizung|thermostat|ventilator)"
+        )
+        smart_home_action = (
+            r"an|aus|ein|einschalten|ausschalten|hoch|runter|öffnen|"
+            r"oeffnen|schließen|schliessen|dimmen|stelle|stell|mach|"
+            r"schalte"
+        )
+        return bool(
+            re.search(rf"(?:{smart_home_target})\b", normalized)
+            and re.search(rf"\b(?:{smart_home_action})\b", normalized)
+            and not re.search(r"\b(?:ob|warum|wieso|weshalb)\b", normalized)
+            and not re.match(
+                r"^(?:ist|sind|war|waren|steht|stehen|läuft|laeuft|geht)\b",
+                normalized,
+            )
+        )
+
     async def handle_device_voice_command(self, transcript):
         normalized = " ".join(transcript.lower().replace("%", " prozent ").split())
+
+        # Smart-home fast path: clear imperative commands must not wait for an
+        # agent consult. Forward the original transcript once to the same fixed
+        # Alexa ioBroker datapoint as the iobroker_alexa plugin. Questions and
+        # ambiguous statements deliberately fall through to the cloud agent.
+        if self.is_smart_home_fast_path(transcript):
+            command = transcript.strip()
+            dedupe_key = self._normalize_alexa_command(command)
+            if self._alexa_already_sent(dedupe_key):
+                print(
+                    f"Smart-home fast path deduplicated (Agent already sent): {command!r}",
+                    flush=True,
+                )
+                return True
+
+            def send_alexa_command():
+                url = self.ALEXA_TEXT_COMMAND_ENDPOINT + urllib.parse.quote(
+                    command, safe=""
+                )
+                request = urllib.request.Request(url, method="GET")
+                with urllib.request.urlopen(request, timeout=3.0) as response:
+                    response.read(1)
+                    return response.status
+
+            try:
+                status = await asyncio.wait_for(
+                    asyncio.to_thread(send_alexa_command), timeout=4.0
+                )
+                if status != 200:
+                    raise RuntimeError(f"ioBroker HTTP {status}")
+                self._alexa_record_sent(dedupe_key)
+                print(
+                    f"Smart-home fast path accepted by Alexa: {command!r} http={status}",
+                    flush=True,
+                )
+            except Exception as exc:
+                print(f"Smart-home fast path failed: {exc!r}", flush=True)
+                return False
+            return True
+
         number_words = {
-            "null": 0, "zehn": 10, "zwanzig": 20, "dreißig": 30,
-            "dreissig": 30, "vierzig": 40, "fünfzig": 50,
-            "fuenfzig": 50, "sechzig": 60, "siebzig": 70,
-            "achtzig": 80, "neunzig": 90, "hundert": 100,
+            "null": 0, "eins": 1, "ein": 1, "zwei": 2, "drei": 3,
+            "vier": 4, "fünf": 5, "fuenf": 5, "sechs": 6,
+            "sieben": 7, "acht": 8, "neun": 9, "zehn": 10,
+            "zwanzig": 20, "dreißig": 30, "dreissig": 30,
+            "vierzig": 40, "fünfzig": 50, "fuenfzig": 50,
+            "sechzig": 60, "siebzig": 70, "achtzig": 80,
+            "neunzig": 90, "hundert": 100,
         }
+        # Mehrsilbige Zahlwoerter zuerst, damit "fuenfzig" nicht als "fuenf"
+        # gelesen wird. Die Einer (fuenf, acht, ...) fehlten zuvor ganz -
+        # dadurch fiel "Helligkeit fuenf Prozent" durch.
         value_pattern = (
-            r"(\d{1,3}|null|zehn|zwanzig|dreißig|dreissig|vierzig|"
-            r"fünfzig|fuenfzig|sechzig|siebzig|achtzig|neunzig|hundert)"
+            r"(\d{1,3}|hundert|zwanzig|dreißig|dreissig|vierzig|"
+            r"fünfzig|fuenfzig|sechzig|siebzig|achtzig|neunzig|"
+            r"zehn|null|eins|ein|zwei|drei|vier|fünf|fuenf|"
+            r"sechs|sieben|acht|neun)"
         )
         commands = (
             (
@@ -178,9 +339,11 @@ class XiaozhiSession:
 
         Ohne diesen Schritt entsteht der Helfer erst mit dem ersten
         Mikrofonpaket - also nach dem Wachwort, waehrend der Nutzer bereits
-        spricht. Die Anlaufzeit faellt dann in den gesprochenen Satz.
+        spricht. Die Anlaufzeit der Sitzung faellt dann in den gesprochenen
+        Satz und die ersten Woerter gehen verloren.
         """
-        self.helper_started_at = asyncio.get_running_loop().time()
+        loop = asyncio.get_running_loop()
+        self.helper_started_at = loop.time()
         print("Prewarm: starting talk helper before first microphone packet", flush=True)
         try:
             await self.start_realtime()
@@ -211,6 +374,8 @@ class XiaozhiSession:
             ),
             OPENCLAW_REALTIME_MODEL=self.args.model,
             OPENCLAW_REALTIME_VOICE=self.args.voice,
+            OPENCLAW_WHISPER_URI=getattr(self.args, "stt_uri", "127.0.0.1:10300"),
+            OPENCLAW_WHISPER_LANGUAGE=getattr(self.args, "stt_language", "de"),
             NODE_EXTRA_CA_CERTS=self.args.gateway_ca,
         )
         self.process = await asyncio.create_subprocess_exec(
@@ -237,6 +402,13 @@ class XiaozhiSession:
                 chunk = await process.stdout.read(8192)
                 if not chunk:
                     break
+                if self.tts_local:
+                    # Lokale Sprachausgabe: das Audio des Providers wird nicht
+                    # mehr zum Geraet geschickt. Der Textpfad (read_events)
+                    # erzeugt die Stimme ueber Piper. Der Provider-Audiostrom
+                    # wird trotzdem vollstaendig gelesen, damit sich der
+                    # Kindprozess nicht an einem vollen Rohr blockiert.
+                    continue
                 # stream_end already told the ESP32 that this spoken response
                 # is complete. GPT-Live can still emit trailing silence/audio;
                 # consume it locally so playback_drained is not delayed while
@@ -341,6 +513,26 @@ class XiaozhiSession:
 
         self.followup_task = asyncio.create_task(close_after_followup_window())
 
+    async def open_followup_window(self, audio_guard_seconds=0.0):
+        """Return the still-open device session to listening for 10 seconds."""
+        await self.send_json({"type": "tts", "state": "stop"})
+        self.tts_started = False
+        self.pcm_buffer = bytearray()
+        self.pcm_bytes_received = 0
+        self.audio_progress_event = asyncio.Event()
+        self.input_stopped = False
+        self.followup_open = True
+        self.followup_audio_packets = 0
+        self.followup_forwarded_packets = 0
+        self.followup_peak = 0
+        self.followup_audio_guard_until = (
+            asyncio.get_running_loop().time() + audio_guard_seconds
+        )
+        self.tts_text_buffer = ""
+        self.local_pcm_bytes_sent = 0
+        await self.start_realtime()
+        self.schedule_followup_timeout()
+
     def schedule_stream_end(self, process):
         self.cancel_session_finish()
 
@@ -353,6 +545,29 @@ class XiaozhiSession:
             await self.finish_audio_stream(process, self.pcm_bytes_received)
 
         self.finish_task = asyncio.create_task(finish_after_trailing_frames())
+
+    def schedule_fast_path_stream_end(self, process):
+        """Close a fast-path acknowledgement even if no final text arrives."""
+        self.cancel_session_finish()
+
+        async def finish_after_audio_idle():
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 8.0
+            while loop.time() < deadline:
+                if (
+                    self.tts_started
+                    and self.last_sent_audio_at > 0
+                    and loop.time() - self.last_sent_audio_at >= 0.45
+                ):
+                    await self.finish_audio_stream(process, self.pcm_bytes_received)
+                    return
+                await asyncio.sleep(0.05)
+            # No usable acknowledgement arrived. Never leave the firmware in
+            # speaking forever; end this command deterministically.
+            await self.send_json({"type": "tts", "state": "stop"})
+            self.websocket.transport.abort()
+
+        self.finish_task = asyncio.create_task(finish_after_audio_idle())
 
     async def finish_audio_stream(self, process, expected_pcm_bytes):
         if self.stream_end_sent:
@@ -392,6 +607,159 @@ class XiaozhiSession:
         # End only this spoken response. Keep the helper and its OpenClaw Talk
         # session alive so a follow-up confirmation uses the same voiceSessionId.
 
+    # ------------------------------------------------------------------
+    # Lokale Sprachausgabe (Piper)
+    # ------------------------------------------------------------------
+    #
+    # Der Provider liefert nur noch Erkennung und Text. Den Text wandelt
+    # Piper lokal in PCM. Zwei Dinge muessen dabei stimmen:
+    #
+    # 1. **Taktung.** Das Geraet nimmt 60-ms-Opus-Rahmen in eine Warteschlange
+    #    von 1,2 s (`MAX_DECODE_PACKETS_IN_QUEUE`). Wird die Warteschlange
+    #    voll, verwirft es weitere Rahmen *ohne Sperre* (`wait=False`). Ein
+    #    kompletter Satz in einem Schwall wuerde also hoerbare Luecken
+    #    erzeugen. Deshalb wird hier in Echtzeit gesendet, mit einem kleinen
+    #    Vorlauf, damit der Anfang nicht unterlaeuft.
+    # 2. **Zerlegung.** Text wird an Satzgrenzen gesprochen, nicht als
+    #    ganzer Absatz. So beginnt die Stimme frueher.
+
+    TTS_LEAD_FRAMES = 3
+    TTS_FRAME_SECONDS = 0.060
+
+    def start_local_tts(self):
+        """Startet den Sprach-Arbeiter fuer eine Antwort."""
+        if self.tts_worker_task and not self.tts_worker_task.done():
+            return
+        self.tts_text_buffer = ""
+        self.tts_pending = 0
+        self.local_pcm_bytes_sent = 0
+        self.tts_drain_event.clear()
+        self.tts_queue = asyncio.Queue()
+        self.tts_worker_task = asyncio.create_task(self._local_tts_worker())
+
+    async def _local_tts_worker(self):
+        loop = asyncio.get_running_loop()
+        try:
+            while True:
+                text = await self.tts_queue.get()
+                if text is None:
+                    break
+                try:
+                    pcm = await loop.run_in_executor(
+                        None, self.speaker.synthesize_pcm, text
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    print(f"local TTS failed: {exc!r}", flush=True)
+                    pcm = b""
+                if pcm:
+                    await self.send_pcm_paced(pcm)
+                    self.local_pcm_bytes_sent += len(pcm)
+        finally:
+            self.tts_drain_event.set()
+
+    async def send_pcm_paced(self, pcm):
+        """Sendet PCM in 60-ms-Rahmen, an der Wanduhr getaktet."""
+        frame_bytes = 24000 * 60 // 1000 * 2
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        index = 0
+        for offset in range(0, len(pcm), frame_bytes):
+            chunk = pcm[offset:offset + frame_bytes]
+            if len(chunk) < frame_bytes:
+                chunk = chunk + b"\x00" * (frame_bytes - len(chunk))
+            await self.send_pcm(chunk)
+            index += 1
+            if index > self.TTS_LEAD_FRAMES:
+                target = started + (index - self.TTS_LEAD_FRAMES) * self.TTS_FRAME_SECONDS
+                delay = target - loop.time()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+
+    def feed_tts_text(self, text):
+        """Sammelt Text und schiebt fertige Saetze an den Arbeiter."""
+        if not self.tts_local or not text:
+            return
+        mode = getattr(self.args, "tts_split", "sentence")
+        if mode == "whole":
+            # Erst am Ende der Antwort sprechen (siehe finish_local_tts).
+            self.tts_text_buffer += text
+            return
+        self.tts_text_buffer += text
+        while True:
+            boundary = self._tts_boundary(self.tts_text_buffer, mode)
+            if boundary <= 0:
+                break
+            phrase = self.tts_text_buffer[:boundary].strip()
+            self.tts_text_buffer = self.tts_text_buffer[boundary:]
+            if phrase:
+                self.tts_pending += 1
+                self.tts_queue.put_nowait(phrase)
+
+    @staticmethod
+    def _tts_boundary(text, mode="sentence"):
+        """Index hinter der naechsten Sprechgrenze, sonst bei Ueberlaenge.
+
+        `mode` steuert, wo getrennt wird:
+
+        - `clause`:  schon am Komma. Die Stimme beginnt am fruehesten,
+          klingt aber zerstueckelter (kurze Stuecke, mehr Nahtstellen).
+        - `sentence` (Standard): am Satzende (`. ! ? ; : …`). Guter
+          Kompromiss — frueher Beginn, wenige Nahtstellen.
+        - `whole`: nicht trennen. Die ganze Antwort wird in einem Stueck
+          gesprochen; die Stimme beginnt spaet, klingt dafuer am ruhigsten.
+        """
+        if mode == "whole":
+            return 0
+        breaks = ".!?;:…" if mode == "sentence" else ".!?;:…,"
+        for index, char in enumerate(text):
+            if char not in breaks:
+                continue
+            # Steht links und rechts eine Ziffer, trennt das Zeichen keine
+            # Saetze, sondern gehoert zur Zahl: Uhrzeit (13:52), Dezimalzahl
+            # (13.95) oder Tausendertrennung. Ein Schnitt dort ergaebe
+            # "Es ist 13:" — hoerbar abgehackt mitten in der Zahl.
+            left_digit = index > 0 and text[index - 1].isdigit()
+            right_digit = index + 1 < len(text) and text[index + 1].isdigit()
+            if left_digit and right_digit:
+                continue
+            return index + 1
+        if len(text) >= 160:
+            space = text.rfind(" ", 0, 160)
+            return space + 1 if space > 0 else 160
+        return 0
+
+    async def finish_local_tts(self, process):
+        """Spricht den Rest und schliesst die Antwort ab."""
+        if self.stream_end_sent:
+            return
+        self.cancel_session_finish()
+        rest = self.tts_text_buffer.strip()
+        self.tts_text_buffer = ""
+        if rest:
+            self.tts_pending += 1
+            self.tts_queue.put_nowait(rest)
+        if self.tts_queue is not None:
+            self.tts_queue.put_nowait(None)
+        try:
+            await asyncio.wait_for(self.tts_drain_event.wait(), timeout=30.0)
+        except asyncio.TimeoutError:
+            print("local TTS drain timed out", flush=True)
+        self.tts_worker_task = None
+        if not self.tts_started:
+            # Nichts zu sprechen (leere Antwort). Kein stream_end noetig.
+            return
+        self.stream_end_sent = True
+        await self.send_json({"type": "tts", "state": "stream_end"})
+        print(
+            f"Local voice stream complete at {self.local_pcm_bytes_sent} PCM bytes; "
+            "device will switch after physical playback drain",
+            flush=True,
+        )
+
+    def schedule_local_stream_end(self, process):
+        self.cancel_session_finish()
+        self.finish_task = asyncio.create_task(self.finish_local_tts(process))
+
     async def read_events(self, process):
         try:
             while True:
@@ -417,44 +785,52 @@ class XiaozhiSession:
                     await self.send_json({"type": "stt", "text": transcript})
                     device_command_handled = await self.handle_device_voice_command(transcript)
                     if device_command_handled:
-                        # Device-local commands are complete after the MCP
-                        # response. Do not let GPT-Live delegate the same text
-                        # to the general agent and manufacture an approval turn.
-                        if not self.input_stopped:
-                            self.input_stopped = True
-                            await self.stop_input(process)
-                        if process.returncode is None:
-                            process.terminate()
-                            await process.wait()
-                        if self.process is process:
-                            self.process = None
-                        await self.send_json({"type": "tts", "state": "stop"})
+                        # The direct HTTP action is already complete. Keep the
+                        # realtime helper alive so its spoken acknowledgement
+                        # can finish cleanly. The helper suppresses the general
+                        # agent consult for this exact fast-path utterance, so
+                        # no second Alexa command can be emitted. Playback drain
+                        # will open the normal follow-up listening window only
+                        # after the acknowledgement has physically finished.
+                        self.input_stopped = True
                         print(
-                            "Device command complete; returning directly to standby",
+                            "Device command complete; waiting for spoken acknowledgement",
                             flush=True,
                         )
-                        self.websocket.transport.abort()
-                        return
+                        self.schedule_fast_path_stream_end(process)
+                        continue
                     # Pause microphone forwarding while the assistant speaks,
                     # but keep the pipe and Talk session open for the next turn.
                     if not self.input_stopped:
                         self.input_stopped = True
+                    if self.tts_local:
+                        self.start_local_tts()
                 elif kind == "assistant_delta" and event.get("text"):
                     await self.send_json({
                         "type": "tts",
                         "state": "sentence_start",
                         "text": event["text"],
                     })
+                    # Lokale Stimme: den Text sofort an Piper weitergeben,
+                    # damit die Sprache frueh beginnt und nicht erst nach dem
+                    # vollstaendigen Transkript.
+                    if self.tts_local:
+                        self.feed_tts_text(event["text"])
                 elif kind == "audio_done":
                     print(
                         "OpenClaw realtime event: "
                         + json.dumps(event, ensure_ascii=False),
                         flush=True,
                     )
-                    await self.finish_audio_stream(
-                        process,
-                        int(event.get("audioByteCount") or 0),
-                    )
+                    if self.tts_local:
+                        # Das Provider-Audio wird verworfen; der Abschluss
+                        # folgt aus dem Text (assistant_done).
+                        pass
+                    else:
+                        await self.finish_audio_stream(
+                            process,
+                            int(event.get("audioByteCount") or 0),
+                        )
                 elif kind == "error":
                     print(f"OpenClaw realtime error: {event.get('message')}", flush=True)
                 elif kind == "tool_call":
@@ -477,7 +853,10 @@ class XiaozhiSession:
                         flush=True,
                     )
                     if event.get("text") and not self.is_interim_text(event["text"]):
-                        self.schedule_stream_end(process)
+                        if self.tts_local:
+                            self.schedule_local_stream_end(process)
+                        else:
+                            self.schedule_stream_end(process)
                 elif kind in {"ready", "tool_result"}:
                     if kind == "ready":
                         self.helper_ready.set()
@@ -497,6 +876,11 @@ class XiaozhiSession:
             print(f"event relay failed: {exc}", flush=True)
 
     async def feed_opus(self, packet):
+        # A finalized utterance is already being answered. In particular, do
+        # not spawn a replacement helper after a fast-path helper exits while
+        # its acknowledgement is still playing.
+        if self.input_stopped:
+            return
         await self.start_realtime()
         if self.followup_open:
             self.followup_audio_packets += 1
@@ -507,8 +891,20 @@ class XiaozhiSession:
         except opuslib.OpusError as exc:
             print(f"invalid Opus packet: {exc}", flush=True)
             return
-        if self.input_stopped:
-            return
+        if pcm:
+            # Pegel mitschreiben: ein zu hoher Schwellwert in der
+            # Aeusserungserkennung faellt sonst nicht auf.
+            samples = memoryview(pcm).cast("h")
+            peak = max((abs(sample) for sample in samples), default=0)
+            self.audio_packets += 1
+            self.audio_peak = max(self.audio_peak, peak)
+            if self.audio_packets % 25 == 0:
+                print(
+                    f"Mic audio: packets={self.audio_packets} "
+                    f"peak={self.audio_peak} followup={self.followup_open}",
+                    flush=True,
+                )
+                self.audio_peak = 0
         if self.followup_open and pcm:
             samples = memoryview(pcm).cast("h")
             self.followup_peak = max(
@@ -520,6 +916,12 @@ class XiaozhiSession:
             and self.process.stdin
             and not self.process.stdin.is_closing()
         ):
+            if (
+                self.followup_open
+                and asyncio.get_running_loop().time()
+                < self.followup_audio_guard_until
+            ):
+                return
             if self.followup_open:
                 self.followup_forwarded_packets += 1
             self.process.stdin.write(pcm)
@@ -528,6 +930,18 @@ class XiaozhiSession:
     async def close(self, abort=False):
         self.cancel_session_finish()
         self.cancel_followup_timeout()
+        # Den Sprach-Arbeiter sauber beenden, damit kein Piper-Thread
+        # beim Herunterfahren haengen bleibt.
+        if self.tts_queue is not None:
+            try:
+                self.tts_queue.put_nowait(None)
+            except asyncio.QueueFull:  # pragma: no cover
+                pass
+        if self.tts_worker_task and not self.tts_worker_task.done():
+            try:
+                await asyncio.wait_for(self.tts_worker_task, timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                self.tts_worker_task.cancel()
         await self.stop_input()
         if self.process:
             if abort and self.process.returncode is None:
@@ -566,8 +980,10 @@ class XiaozhiSession:
                     })
                     if payload.get("features", {}).get("mcp"):
                         asyncio.create_task(self.initialize_mcp())
-                    # Vorwaermen: hier ist der einzige Zeitpunkt, der frueh
-                    # genug liegt - der Kanal ist offen und das Wachwort noch
+                    # Vorwaermen: Die Talk-Sitzung des Providers braucht rund
+                    # 3 Sekunden bis sie zuhoert. Hier ist der einzige
+                    # Zeitpunkt, der frueh genug liegt: das Geraet hat gerade
+                    # den Kanal geoeffnet und der Nutzer hat das Wachwort noch
                     # nicht gesprochen. Bewusst als Task, damit der
                     # hello-Austausch nicht darauf wartet.
                     asyncio.create_task(self.prewarm_realtime())
@@ -579,11 +995,33 @@ class XiaozhiSession:
                         pending.set_result(mcp_payload)
                 elif kind == "listen" and payload.get("state") == "start":
                     await self.start_realtime()
-                elif kind == "device" and payload.get("event") == "state":
+                elif (
+                    kind == "device"
+                    and payload.get("event") == "state"
+                ):
                     # Die Firmware meldet bei jedem Zustandswechsel ihren
-                    # echten Zustand. Die Bridge war dafuer blind und musste
-                    # den Geraetezustand aus dem Timing erraten.
-                    print(f"Device state: {payload.get('state')}", flush=True)
+                    # echten Zustand. Bisher wurde das ignoriert; die Bridge
+                    # musste den Geraetezustand aus dem Timing erraten. Wir
+                    # protokollieren ihn, damit sich Anzeige und Wirklichkeit
+                    # bei Bedarf abgleichen lassen.
+                    print(
+                        f"Device state: {payload.get('state')}",
+                        flush=True,
+                    )
+                    # In the follow-up window, "speaking" means the device
+                    # has accepted a new utterance and is waiting for its
+                    # result. Do not let the original idle timer close the
+                    # socket while that utterance is still being processed.
+                    if (
+                        self.followup_open
+                        and payload.get("state") == "speaking"
+                    ):
+                        self.cancel_followup_timeout()
+                        self.followup_open = False
+                        print(
+                            "Follow-up utterance accepted; standby timeout cancelled",
+                            flush=True,
+                        )
                 elif kind == "listen" and payload.get("state") == "stop":
                     # This device-state notification may arrive after
                     # playback_drained. The finalized user transcript already
@@ -598,18 +1036,7 @@ class XiaozhiSession:
                         "Physical playback drained; opening follow-up listening window",
                         flush=True,
                     )
-                    await self.send_json({"type": "tts", "state": "stop"})
-                    self.tts_started = False
-                    self.pcm_buffer = bytearray()
-                    self.pcm_bytes_received = 0
-                    self.audio_progress_event = asyncio.Event()
-                    self.input_stopped = False
-                    self.followup_open = True
-                    self.followup_audio_packets = 0
-                    self.followup_forwarded_packets = 0
-                    self.followup_peak = 0
-                    await self.start_realtime()
-                    self.schedule_followup_timeout()
+                    await self.open_followup_window()
                 elif kind == "abort":
                     break
         finally:
@@ -635,9 +1062,116 @@ async def main():
     )
     parser.add_argument(
         "--helper",
-        default=str(Path(__file__).resolve().with_name("openclaw-talk-realtime.mjs")),
+        default=None,
+        help="Pfad zum Sprachhelfer (Standard je nach Modus)",
+    )
+    parser.add_argument(
+        "--stt-local",
+        action="store_true",
+        help="Spracherkennung lokal ueber Wyoming-Whisper statt ueber OpenAI",
+    )
+    parser.add_argument(
+        "--stt-uri",
+        default="127.0.0.1:10300",
+        help="Adresse des Wyoming-Whisper-Dienstes",
+    )
+    parser.add_argument(
+        "--stt-language",
+        default="de",
+        help="Sprache fuer die lokale Erkennung",
+    )
+    parser.add_argument(
+        "--tts-local",
+        action="store_true",
+        help="Sprachausgabe lokal ueber Piper statt ueber den Provider",
+    )
+    parser.add_argument(
+        "--tts-voice",
+        default="de_DE-thorsten-medium",
+        help="Piper-Stimme fuer die lokale Sprachausgabe",
+    )
+    parser.add_argument(
+        "--tts-voice-dir",
+        default=str(Path.home() / ".local" / "share" / "piper-voices"),
+        help="Verzeichnis der Piper-Stimmen",
+    )
+    parser.add_argument(
+        "--tts-model-path",
+        default="",
+        help="Direkter Pfad zu einer .onnx-Stimme (uebersteuert --tts-voice)",
+    )
+    parser.add_argument(
+        "--tts-split",
+        choices=("clause", "sentence", "whole"),
+        default="sentence",
+        help=(
+            "Wo der Sprechtext getrennt wird: clause = am Komma (fruehester "
+            "Beginn), sentence = am Satzende (Standard), whole = die ganze "
+            "Antwort in einem Stueck (spaetester Beginn, am ruhigsten)"
+        ),
+    )
+    # Feinregler der Stimme (Piper). Weggelassen = Pipers Standard.
+    parser.add_argument(
+        "--tts-length-scale",
+        type=float,
+        default=None,
+        help="Tempo: 1.0 normal, kleiner = schneller, groesser = langsamer",
+    )
+    parser.add_argument(
+        "--tts-noise-scale",
+        type=float,
+        default=None,
+        help="Aussprache-Variation: kleiner = gleichmaessiger",
+    )
+    parser.add_argument(
+        "--tts-noise-w-scale",
+        type=float,
+        default=None,
+        help="Lautlaengen-Variation: kleiner = gleichmaessiger",
+    )
+    parser.add_argument(
+        "--tts-volume",
+        type=float,
+        default=None,
+        help="Lautstaerke der Synthese (0.0-1.0, nicht die Geraetelautstaerke)",
     )
     args = parser.parse_args()
+
+    # Lokale Erkennung bedeutet zwangslaeufig lokale Sprachausgabe: der
+    # lokale Helfer liefert gar kein Audio, es gaebe sonst nichts zu spielen.
+    if args.stt_local:
+        args.tts_local = True
+
+    if args.helper is None:
+        args.helper = str(
+            Path(__file__).resolve().with_name(
+                "local-voice.mjs" if args.stt_local else "openclaw-talk-realtime.mjs"
+            )
+        )
+
+    if args.tts_local:
+        if PiperSpeaker is None:
+            raise SystemExit(
+                "--tts-local verlangt das Modul 'piper'. Installation:\n"
+                "  pip install piper-tts\n"
+                "oder das Piper-Paket der Distribution verwenden."
+            )
+        if args.tts_model_path:
+            model_path = args.tts_model_path
+        else:
+            model_path = find_default_voice(args.tts_voice_dir, args.tts_voice)
+        print(f"Local voice enabled: loading {model_path}", flush=True)
+        args.speaker = PiperSpeaker(
+            model_path,
+            length_scale=args.tts_length_scale,
+            noise_scale=args.tts_noise_scale,
+            noise_w_scale=args.tts_noise_w_scale,
+            volume=args.tts_volume,
+        )
+        print(f"Local voice ready: {args.speaker.describe()}", flush=True)
+        print(f"Local voice split mode: {args.tts_split}", flush=True)
+    else:
+        args.speaker = None
 
     async def handler(websocket):
         print(f"XiaoZhi connected from {websocket.remote_address}", flush=True)
