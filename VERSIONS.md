@@ -18,6 +18,9 @@ Diese Werte sind der **Ist-Stand vom 2026-09-28** auf dem Referenzhost.
 | Stimme | `cove` |
 | Talk-Session-Key | `agent:voice:xiaozhi-realtime-v5` (konstant, ohne UUID-Anhang) |
 | Talk-Consult-Key | `agent:allgemein:xiaozhi-realtime-v5` (konstant, ohne UUID-Anhang) |
+| Schnellweg Schaltbefehle | Gateway-Weiche `jarvis-safe-router-v1` + `jarvis-direct-completion-v2`; erkannt bis Alexa **7-51 ms** (belegt 2026-10-18) |
+| Schnellweg-Sessions | `agent:voice:xiaozhi-realtime-v5` **und** `…-v6` (Muster `^agent:voice:xiaozhi-realtime-v\d+$`) |
+| Alexa-Geraeteliste | aus `alexa2.0.Smart-Home-Devices.*`, 102 erkannt / 23 zugelassen, taeglich per Timer, fail-closed nach 48 h |
 
 ## Laufende Firmware (Geräte-Ist-Stand)
 
