@@ -16,8 +16,9 @@ Diese Werte sind der **Ist-Stand vom 2026-09-28** auf dem Referenzhost.
 | Bridge-Python-Pakete | `websockets==15.0.1`, `opuslib==3.0.1` |
 | Realtime-Modell | `gpt-live-1-codex` |
 | Stimme | `cove` |
-| Talk-Session-Key | `agent:voice:xiaozhi-realtime-v5` (konstant, ohne UUID-Anhang) |
-| Talk-Consult-Key | `agent:allgemein:xiaozhi-realtime-v5` (konstant, ohne UUID-Anhang) |
+| Talk-Session-Key | `agent:voice:xiaozhi-realtime-v6` (konstant, ohne UUID-Anhang) |
+| Talk-Consult-Key | `agent:voice:xiaozhi-consult-v6` (konstant, ohne UUID-Anhang) |
+| Sprechbeginn-Erkennung | `PROVIDER_SPEECH_PEAK=60`, Rueckhaltefenster 120 ms (belegt 2026-10-19) |
 | Schnellweg Schaltbefehle | Gateway-Weiche `jarvis-safe-router-v1` + `jarvis-direct-completion-v2`; erkannt bis Alexa **7-51 ms** (belegt 2026-10-18) |
 | Schnellweg-Sessions | `agent:voice:xiaozhi-realtime-v5` **und** `…-v6` (Muster `^agent:voice:xiaozhi-realtime-v\d+$`) |
 | Alexa-Geraeteliste | aus `alexa2.0.Smart-Home-Devices.*`, 102 erkannt / 23 zugelassen, taeglich per Timer, fail-closed nach 48 h |

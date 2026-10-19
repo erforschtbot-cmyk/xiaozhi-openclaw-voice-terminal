@@ -108,8 +108,8 @@ OpenClaw-Werkzeuge, Skills, Hostzugriff
 `server.py` setzt seit dem 27.09.2026 **konstante** Schlüssel:
 
 ```python
-OPENCLAW_TALK_SESSION_KEY    = self.args.session_key        # agent:voice:xiaozhi-realtime-v5
-OPENCLAW_TALK_CONSULT_SESSION_KEY = self.args.consult_session_key  # agent:allgemein:xiaozhi-realtime-v5
+OPENCLAW_TALK_SESSION_KEY    = self.args.session_key        # agent:voice:xiaozhi-realtime-v6
+OPENCLAW_TALK_CONSULT_SESSION_KEY = self.args.consult_session_key  # agent:voice:xiaozhi-consult-v6
 ```
 
 Vorher hing an beiden Schlüsseln eine UUID (`…-{turn_id}` bzw. `…-{session_id}`).

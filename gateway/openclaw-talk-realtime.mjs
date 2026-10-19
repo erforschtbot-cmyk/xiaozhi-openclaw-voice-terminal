@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
+import { bindVoiceSession, unbindVoiceSession } from "./voice-turn-context.mjs";
 
 const OPENCLAW_NPM_ROOT =
   process.env.OPENCLAW_NPM_ROOT ||
@@ -16,6 +17,28 @@ const { GatewayClient } = await import(
 
 const SESSION_KEY =
   process.env.OPENCLAW_TALK_SESSION_KEY || "agent:voice:voice-assistant";
+
+// Der echte gesprochene Satz wird fuer die Gateway-Weiche hinterlegt. Sie darf
+// nur dann direkt schalten, wenn der Tool-Aufruf EXAKT diesem Satz entspricht.
+// So kann das Modell keinen Teilbefehl durchreichen.
+const SPOKEN_UTTERANCE_FILE =
+  process.env.OPENCLAW_SPOKEN_UTTERANCE_FILE ||
+  "/home/openclaw/.local/share/jarvis-realtime-bridge/last-utterance.json";
+
+function publishSpokenUtterance(text) {
+  try {
+    const payload = {
+      utterance: text,
+      sessionKey: SESSION_KEY,
+      ts: Date.now(),
+    };
+    const tmp = `${SPOKEN_UTTERANCE_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(payload));
+    fs.renameSync(tmp, SPOKEN_UTTERANCE_FILE);
+  } catch {
+    /* Diagnose darf den Sprachpfad nie blockieren */
+  }
+}
 const CONSULT_SESSION_KEY =
   process.env.OPENCLAW_TALK_CONSULT_SESSION_KEY || "";
 const MODEL = process.env.OPENCLAW_REALTIME_MODEL || "gpt-realtime-2.1";
@@ -228,6 +251,7 @@ const client = new GatewayClient({
     if (event.type === "transcript") {
       if (event.role === "user" && event.final && event.text?.trim()) {
         lastUserTranscript = event.text.trim();
+        // Gateway owns the authoritative transcript and per-turn identity.
         assistantAudioGateUntil = Date.now() + 200;
         userFinal = true;
         assistantFinal = false;
@@ -393,6 +417,9 @@ const session = await client.request("talk.session.create", {
   reasoningEffort: "minimal",
 });
 sessionId = session.sessionId;
+bindVoiceSession(sessionId, SESSION_KEY, process.env.OPENCLAW_VOICE_DEVICE_ID,
+  process.env.OPENCLAW_VOICE_ROOM);
+process.once("exit", () => unbindVoiceSession(sessionId));
 emit("ready", {
   sessionId,
   consultSessionKey: CONSULT_SESSION_KEY || null,

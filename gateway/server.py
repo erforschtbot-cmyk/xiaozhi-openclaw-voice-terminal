@@ -15,6 +15,10 @@ from pathlib import Path
 import opuslib
 from websockets.asyncio.server import serve
 
+# Raum-Zuordnung: das Geraet schickt seine MAC im Handshake (Device-Id).
+# Daraus wird der Raum ermittelt und fuer die Weiche hinterlegt.
+from room_command import publish_active_room, room_for_device
+
 # Lokale Sprachausgabe. Das Modul wird nur importiert, wenn der lokale
 # TTS-Pfad aktiv ist; so bleibt der Provider-Pfad ohne Piper-Abhaengigkeit
 # lauffaehig, falls jemand Piper nicht installiert hat.
@@ -178,6 +182,24 @@ class XiaozhiSession:
         self.helper_starting = False
         self.helper_ready_at = 0.0
         self.helper_started_at = 0.0
+
+        # --- Diagnose: Wann kommt Provider-Audio relativ zum Transkript? ---
+        # Ohne diese Zeitmarken laesst sich nicht unterscheiden, ob die
+        # echte Antwort zu frueh beginnt oder ein Filler das Mikrofon
+        # abschaltet (tts start -> Firmware geht auf speaking).
+        self.transcript_final_at = 0.0
+        self.first_audio_at = 0.0
+        self.first_audio_bytes = 0
+        self.audio_before_transcript_bytes = 0
+        self.audio_diag_bytes = 0
+        self.audio_diag_blocks = 0
+        self.audio_diag_peak = 0
+        # Rueckhaltefenster fuer den Sprechbeginn. GPT-Live haelt den
+        # Ausgabestrom durchgehend offen und sendet ab dem Verbindungsaufbau
+        # reine Stille (gemessen: 3826 Bytes, Peak 0). Diese Stille darf kein
+        # `tts start` ausloesen, sonst schaltet die Firmware auf "Sprechen"
+        # und beendet die Sprachverarbeitung mitten im Satz des Nutzers.
+        self.lead_silence = bytearray()
 
         # --- Lokale Sprachausgabe (Piper) -------------------------------
         # `tts_local` schaltet den Pfad um: der Provider liefert dann nur
@@ -453,6 +475,14 @@ class XiaozhiSession:
         self.pcm_bytes_received = 0
         self.audio_progress_event = asyncio.Event()
         self.stream_end_sent = False
+        self.transcript_final_at = 0.0
+        self.first_audio_at = 0.0
+        self.first_audio_bytes = 0
+        self.audio_before_transcript_bytes = 0
+        self.audio_diag_bytes = 0
+        self.audio_diag_blocks = 0
+        self.audio_diag_peak = 0
+        self.lead_silence = bytearray()
 
         env = os.environ.copy()
         env.update(
@@ -468,6 +498,8 @@ class XiaozhiSession:
             ),
             OPENCLAW_REALTIME_MODEL=self.args.model,
             OPENCLAW_REALTIME_VOICE=self.args.voice,
+            OPENCLAW_VOICE_DEVICE_ID=getattr(self, "device_id", "") or "",
+            OPENCLAW_VOICE_ROOM=getattr(self, "device_room", "") or "",
             OPENCLAW_WHISPER_URI=getattr(self.args, "stt_uri", "127.0.0.1:10300"),
             OPENCLAW_WHISPER_LANGUAGE=getattr(self.args, "stt_language", "de"),
             NODE_EXTRA_CA_CERTS=self.args.gateway_ca,
@@ -509,6 +541,27 @@ class XiaozhiSession:
                 # the Talk session remains open for a follow-up utterance.
                 if self.stream_end_sent:
                     continue
+                loop_now = asyncio.get_running_loop().time()
+                if self.first_audio_at <= 0:
+                    self.first_audio_at = loop_now
+                    self.first_audio_bytes = len(chunk)
+                    lead = (
+                        loop_now - self.transcript_final_at
+                        if self.transcript_final_at > 0
+                        else None
+                    )
+                    print(
+                        f"{self.tag} DIAG first provider audio bytes={len(chunk)} "
+                        f"peak={self._pcm_peak(chunk)} "
+                        f"transcript_final={'yes' if lead is not None else 'NO'} "
+                        f"lead={f'{lead:+.3f}s' if lead is not None else 'n/a'}",
+                        flush=True,
+                    )
+                self.audio_diag_blocks += 1
+                self.audio_diag_peak = max(self.audio_diag_peak, self._pcm_peak(chunk))
+                self.audio_diag_bytes += len(chunk)
+                if self.transcript_final_at <= 0:
+                    self.audio_before_transcript_bytes += len(chunk)
                 self.pcm_bytes_received += len(chunk)
                 self.audio_progress_event.set()
                 self.pcm_buffer.extend(chunk)
@@ -517,12 +570,76 @@ class XiaozhiSession:
                     del self.pcm_buffer[:frame_bytes]
                     # Forward the first provider audio frame immediately.
                     # Do not wait for transcript text or segment classification.
+                    if not self.tts_started:
+                        peak = self._pcm_peak(pcm)
+                        if peak < self.PROVIDER_SPEECH_PEAK:
+                            # Noch kein Sprachbeginn: Stille verwerfen, aber
+                            # einen kurzen Ansatz als Rueckhaltefenster
+                            # behalten, damit die erste Silbe nicht fehlt.
+                            self.lead_silence.extend(pcm)
+                            if len(self.lead_silence) > self.LEAD_LOOKBACK_BYTES:
+                                del self.lead_silence[
+                                    : len(self.lead_silence) - self.LEAD_LOOKBACK_BYTES
+                                ]
+                            continue
+                        if self.lead_silence:
+                            lookback = bytes(self.lead_silence)
+                            self.lead_silence.clear()
+                            print(
+                                f"{self.tag} Provider speech onset peak={peak}; "
+                                f"flushing {len(lookback)} lookback bytes",
+                                flush=True,
+                            )
+                            # send_pcm kodiert genau einen 60-ms-Rahmen
+                            # (1440 Samples). Den Rueckhalteblock deshalb
+                            # rahmenweise ausliefern, nie am Stueck.
+                            for offset in range(0, len(lookback), frame_bytes):
+                                part = lookback[offset:offset + frame_bytes]
+                                if len(part) < frame_bytes:
+                                    part = part + b"\x00" * (frame_bytes - len(part))
+                                await self.send_pcm(part)
                     await self.send_pcm(pcm)
         except Exception as exc:
             print(f"{self.tag} audio relay failed: {exc}", flush=True)
 
+    @staticmethod
+    def _pcm_peak(pcm):
+        """Hoechster Absolutwert eines 16-Bit-Mono-Blocks (0..32767)."""
+        from array import array
+
+        if len(pcm) < 2:
+            return 0
+        samples = array("h")
+        samples.frombytes(pcm[: len(pcm) - (len(pcm) % 2)])
+        if samples.itemsize != 2:  # pragma: no cover
+            return 0
+        return max((abs(s) for s in samples), default=0)
+
+    # Ab diesem Pegel gilt ein Provider-Block als Sprache. Gemessen: reine
+    # Stille liegt bei Peak 0, normale Sprache bei 700..17000. Der Wert ist
+    # bewusst niedrig, damit ein leiser Sprechbeginn nicht abgeschnitten wird.
+    PROVIDER_SPEECH_PEAK = 60
+    # So viel Ton wird vor dem erkannten Sprechbeginn zurueckgehalten, damit
+    # der erste Silbenansatz nicht verloren geht (120 ms bei 24 kHz/16 Bit).
+    LEAD_LOOKBACK_BYTES = 24000 * 2 * 120 // 1000
+
     async def send_pcm(self, pcm):
         if not self.tts_started:
+            loop_now = asyncio.get_running_loop().time()
+            lead = (
+                loop_now - self.transcript_final_at
+                if self.transcript_final_at > 0
+                else None
+            )
+            print(
+                f"{self.tag} DIAG tts start (device goes speaking) "
+                f"transcript_final={'yes' if lead is not None else 'NO'} "
+                f"lead={f'{lead:+.3f}s' if lead is not None else 'n/a'} "
+                f"audio_before_transcript_bytes={self.audio_before_transcript_bytes} "
+                f"diag_bytes={self.audio_diag_bytes} diag_blocks={self.audio_diag_blocks} "
+                f"diag_peak={self.audio_diag_peak}",
+                flush=True,
+            )
             await self.send_json({"type": "tts", "state": "start"})
             self.tts_started = True
             self.arm_speaking_guard()
@@ -744,6 +861,9 @@ class XiaozhiSession:
         self.tts_started = False
         self.pcm_buffer = bytearray()
         self.pcm_bytes_received = 0
+        # Rueckhaltefenster der vorigen Runde verwerfen: sonst koennte ein
+        # Rest in die naechste Antwort bluten und den Sprechbeginn verfaelschen.
+        self.lead_silence = bytearray()
         self.audio_progress_event = asyncio.Event()
         self.input_stopped = False
         self.followup_open = True
@@ -820,6 +940,18 @@ class XiaozhiSession:
             return
 
         if not self.tts_started:
+            # Kein Sprachbeginn erkannt: Der Provider hat fuer diese Runde nur
+            # Stille geliefert (gemessen: Peak 0). Ohne Abschluss bliebe das
+            # Geraet im Zuhoeren stehen, waehrend die Bridge das Mikrofon
+            # bereits verwirft. Deshalb kontrolliert ins Nachhoerfenster
+            # wechseln, damit der naechste Satz wieder ankommt.
+            print(
+                f"{self.tag} No provider speech in this round "
+                f"(diag_peak={self.audio_diag_peak}); "
+                "reopening listening window",
+                flush=True,
+            )
+            await self.open_followup_window()
             return
 
         self.stream_end_sent = True
@@ -1019,7 +1151,18 @@ class XiaozhiSession:
                     # Re-arm per utterance even when provider audio preceded
                     # the final transcript and the previous guard already exited.
                     self.arm_speaking_guard()
-                    print(f"{self.tag} User transcript: {transcript}", flush=True)
+                    self.transcript_final_at = asyncio.get_running_loop().time()
+                    print(
+                        f"{self.tag} User transcript: {transcript} "
+                        f"[diag first_audio={'yes' if self.first_audio_at > 0 else 'NO'} "
+                        f"audio_before_transcript_bytes={self.audio_before_transcript_bytes}]",
+                        flush=True,
+                    )
+                    # Jetzt ist klar, welches Geraet den Nutzer gehoert hat.
+                    # Erst hier den Raum hinterlegen, damit bei zwei Geraeten
+                    # nicht das zuletzt verbundene gewinnt.
+                    if getattr(self, "device_room", None):
+                        publish_active_room(self.device_id, self.device_room)
                     await self.send_json({"type": "stt", "text": transcript})
                     device_command_handled = await self.handle_device_voice_command(transcript)
                     if device_command_handled:
@@ -1438,8 +1581,27 @@ async def main():
         peer_ip = websocket.remote_address[0] if websocket.remote_address else "?"
         dev_tag = f"[{peer_ip.split('.')[-1]}]"
         print(f"{dev_tag} XiaoZhi connected from {websocket.remote_address}", flush=True)
+        # Raum des Geraets aus der Device-Id (MAC) im Handshake ermitteln.
+        # Bewusst nur merken, NICHT veroeffentlichen: bei zwei verbundenen
+        # Geraeten wuerde sonst das zuletzt verbundene gewinnen. Veroeffentlicht
+        # wird erst beim Sprechen, nach der Weckwort-Absprache.
+        device_id = None
+        room = None
         try:
-            await XiaozhiSession(websocket, args).run()
+            headers = websocket.request.headers if websocket.request else {}
+            device_id = headers.get("Device-Id") or headers.get("device-id")
+            room = room_for_device(device_id)
+            if room:
+                print(f"{dev_tag} Raum aus Device-Id {device_id}: {room}", flush=True)
+            else:
+                print(f"{dev_tag} Kein Raum hinterlegt fuer Device-Id {device_id!r}", flush=True)
+        except Exception as exc:
+            print(f"{dev_tag} Raum-Ermittlung fehlgeschlagen: {exc!r}", flush=True)
+        try:
+            session = XiaozhiSession(websocket, args)
+            session.device_id = device_id
+            session.device_room = room
+            await session.run()
         except Exception as exc:
             print(f"{dev_tag} XiaoZhi session failed: {exc}", flush=True)
 

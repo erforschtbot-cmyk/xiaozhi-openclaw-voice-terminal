@@ -5,3 +5,6 @@ source/
 *.bak-*
 __pycache__/
 
+
+# Laufzeitdaten der Raum-/Session-Bindung
+voice-bindings/

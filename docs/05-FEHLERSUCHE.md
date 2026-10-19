@@ -180,6 +180,72 @@ Keine pauschalen Startpuffer oder langen Audio-Silence-Timer ergänzen. Frühere
 Versuche mit 180 ms Startpuffer beziehungsweise 1,2 s Audio-Pause beschädigten den
 funktionierenden Ablauf. Änderungen immer einzeln testen und rückrollbar halten.
 
+## Mikrofon schaltet nach etwa 5 Sekunden ab — lange Sätze werden abgeschnitten
+
+Symptom: Nach dem Wachwort hört das Gerät nach rund **5 Sekunden** auf zuzuhören,
+unabhängig davon, wie lange gesprochen wird, welche Wörter fallen und ob Pausen
+gemacht werden. Es fühlt sich wie eine feste Längenbegrenzung an. Zählungen enden
+mitten in der Reihe („bis zwölf", „bis acht"), obwohl weitergezählt wurde.
+
+**Ursache (belegt 2026-10-19):** GPT-Live hält den Ausgabestrom ab dem
+Verbindungsaufbau offen und sendet zuerst **reine digitale Stille**. Gemessen:
+
+```text
+DIAG first provider audio bytes=946 peak=0 transcript_final=NO
+DIAG tts start … diag_bytes=3826 diag_blocks=4 diag_peak=0
+Device state: speaking      ← Mikrofon aus, obwohl noch niemand gesprochen hat
+```
+
+`gateway/server.py` wertete in `send_pcm()` **jedes** eintreffende Frame als
+Sprechbeginn und schickte `tts start`. Die Firmware wechselt daraufhin nach
+`kDeviceStateSpeaking` und ruft `EnableVoiceProcessing(false)` — das Mikrofon ist
+mitten im Satz abgeschaltet. Ab diesem Moment kommen keine `Mic audio`-Zeilen
+mehr; der Rest des Satzes erreicht das Modell nie.
+
+**Nicht die Ursache** (alles geprüft und ausgeschlossen):
+
+- `silenceDurationMs` / `vadThreshold` im Helper — im GPT-Live-Pfad wird **keine**
+  `turn_detection` gesendet (`buildOpenAIQuicksilverSession`: nur `model`,
+  `instructions`, `audio.output.voice`, `delegation`). Die 700 ms wirken dort nicht.
+- Geräte-VAD (`AFE VAD_MODE_0`) — meldet nur `MAIN_EVENT_VAD_CHANGE` und schaltet
+  die Ring-LED; sie beendet keinen Turn.
+- Pufferüberlauf (240 000 Bytes = 5,0 s) — würde die **ältesten** Bytes verwerfen.
+  Das Transkript begann aber korrekt am Satzanfang, es fehlte nur das Ende.
+- Mikrofon-Powersave (`AUDIO_POWER_TIMEOUT_MS` = 15 s) — falsche Größenordnung.
+
+**Fix (2026-10-19, nur Bridge):**
+
+- `PROVIDER_SPEECH_PEAK = 60` — Blöcke darunter gelten nicht als Sprechbeginn.
+- `LEAD_LOOKBACK_BYTES` = 120 ms Rückhaltefenster; beim ersten echten Ton werden
+  die gepufferten Rahmen **rahmenweise** (je 2880 Bytes) nachgeliefert, damit die
+  erste Silbe nicht fehlt.
+- `lead_silence` wird pro Runde und in `open_followup_window()` zurückgesetzt.
+- Leerfall in `finish_audio_stream()`: eine Runde ohne Sprachbeginn öffnet das
+  Nachhörfenster, statt das Gerät im Zuhören hängen zu lassen.
+
+**Diagnosezeilen (bewusst im Produktivpfad belassen, ~3 Zeilen/450 Bytes pro Turn):**
+
+```text
+DIAG first provider audio bytes=946 peak=0 transcript_final=NO lead=n/a
+Provider speech onset peak=8267; flushing 5760 lookback bytes
+DIAG tts start … lead=+0.200s diag_bytes=484786 diag_peak=8267
+```
+
+Alarmsignal bei Rückfall: `lead` im **Minus** oder `tts start` mit niedrigem
+`diag_peak`. Gesund ist `lead` ≥ 0 — Sprache beginnt **nach** dem finalen Transkript.
+
+**Verifikation 2026-10-19 (Gerät: Audio-Board, Badezimmer):**
+
+| Test | Mikrofon offen | Transkript |
+|---|---|---|
+| Zählen 1–20 ohne Pause | 20 s | vollständig |
+| Zählen 1–12 | 6 s+ | vollständig |
+| Zählen 1–10, langsam mit Mini-Pausen | 17 s | vollständig, `lead=+0.200s` |
+
+Pausen sind im Log an niedrigen `Mic audio`-Pegeln (35–37) erkennbar, während die
+Paketzähler weiterlaufen — das Gerät sendet also durch, statt abzuschalten.
+
+
 ## Firmware-Build verliert Mikrofon/Audio
 
 Zuerst das verifizierte App-Image bei `0x20000` wiederherstellen. Nicht ungeprüft
