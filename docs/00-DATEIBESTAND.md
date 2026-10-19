@@ -194,9 +194,34 @@ der, der bei einem Umzug am häufigsten vergessen wird und still fehlschlägt.
 | Nicht im Repo | Grund |
 |---|---|
 | `*.bak-*`, `*.broken-*` | Zwischenstände, keine Wahrheit |
+| `unit.before-local-20261014` | v5-Altstand, ersetzt durch `profile-local.service` |
+| `unit.cloudswitch-backup-20260928-153356` | v5-Altstand mit `--stt-local --tts-local`, ersetzt durch `profile-local.service` |
+| `unit.local-20260928-153356` | dito, gleicher Inhalt wie das Cloudswitch-Backup |
 | `.venv/`, `__pycache__/` | aus `requirements.txt` reproduzierbar |
 | `active-room.json`, `last-*.json`, `voice-bindings/` | Laufzeitdaten mit Zeitstempeln |
 | `alexa-device-catalog.json` | aus ioBroker erzeugbar |
 | `~/.openclaw/secrets.json` | Zugangsdaten |
 | Logs | Laufzeitdaten |
 | Firmware-Binaries der Geräte | in `firmware/prebuilt/` separat versioniert |
+
+Die drei `unit.*`-Dateien sind **keine** fehlenden Bestandteile: Sie sind ältere
+Fassungen der systemd-Unit, alle mit Session-Key **v5**. Der gültige Stand steckt
+in `gateway/profile-local.service` (lokal) und `gateway/profile-realtime.service`
+(realtime) — beide auf **v6**. Wer eine `unit.*`-Datei zurückkopiert, setzt den
+funktionierenden Stand auf v5 zurück und bringt den Schnellweg durcheinander.
+
+### Wenn die Laufzeitdateien trotzdem gebraucht werden
+
+Sie lassen sich alle neu erzeugen, statt sie zu kopieren:
+
+```bash
+cd ~/.local/share/jarvis-realtime-bridge
+
+# Geraetekatalog aus ioBroker (braucht erreichbares Alexa2)
+node refresh-alexa-catalog.mjs
+
+# Raum-Map ist Konfiguration und liegt im Repo (gateway/room-map.json)
+# active-room.json, last-utterance.json, last-alexa-command.json und
+# voice-bindings/ entstehen beim ersten Sprechen von selbst — nichts zu tun.
+```
+
