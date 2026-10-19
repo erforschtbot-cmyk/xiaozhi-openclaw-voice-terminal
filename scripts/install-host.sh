@@ -26,6 +26,10 @@ while (($#)); do
   esac
 done
 [[ -n "$public_host" ]] || usage
+[[ "$install_dir" == /home/openclaw/.local/share/jarvis-realtime-bridge ]] || {
+  echo "This baseline requires /home/openclaw/.local/share/jarvis-realtime-bridge; see docs/00-START-HIER.md" >&2
+  exit 1
+}
 
 for command_name in python3 node systemctl; do
   command -v "$command_name" >/dev/null || { echo "Missing command: $command_name" >&2; exit 1; }
@@ -57,7 +61,18 @@ install -m 0644 "$repo_dir/gateway/requirements.txt"           "$install_dir/req
 # --- Konfiguration, die vorhanden sein MUSS -------------------------------
 # room-map.json ist keine Laufzeitdatei: ohne sie bekommt kein Geraet einen
 # Raum und "Licht an" landet in keinem Raum. Sie gehoert ins Repo.
-install -m 0644 "$repo_dir/gateway/room-map.json"              "$install_dir/room-map.json"
+# Preserve a deployment's own MAC/room configuration on repeated installs.
+if [[ ! -e "$install_dir/room-map.json" ]]; then
+  install -m 0644 "$repo_dir/gateway/room-map.json" "$install_dir/room-map.json"
+fi
+# Verification scripts depend on these offline tests being installed too.
+for test_file in "$repo_dir"/gateway/test-*.mjs "$repo_dir"/gateway/test_*.py; do
+  install -m 0644 "$test_file" "$install_dir/"
+done
+# Install the optional catalog units, but do not contact the reference ioBroker.
+# Enable the timer only after configuring the user's own endpoint.
+install -m 0644 "$repo_dir/systemd/jarvis-alexa-catalog.service" "$HOME/.config/systemd/user/"
+install -m 0644 "$repo_dir/systemd/jarvis-alexa-catalog.timer" "$HOME/.config/systemd/user/"
 
 # Modus-Schalter: Existenz der Datei schaltet den alten Bridge-Direktpfad AUS.
 # Sie muss vorhanden sein, damit genau EIN Ausfuehrer (die Gateway-Weiche)

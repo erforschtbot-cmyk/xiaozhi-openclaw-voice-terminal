@@ -1,9 +1,12 @@
 # 1. Host installieren
 
+> Zuerst `00-START-HIER.md`: diese Anleitung setzt bereits eingerichtetes TLS,
+> Token, Provider und ein funktionierendes Talk-/Consult-Ziel voraus; sie ist kein kompletter Bootstrap.
+
 ## Voraussetzungen
 
 - Linux mit systemd-Userdiensten
-- OpenClaw `2026.9.6`
+- OpenClaw `2026.10.4`
 - Node.js und npm
 - Python 3 mit `venv` (Referenzhost: `3.14.7`)
 - `libopus`
@@ -29,7 +32,7 @@ sudo apt install -y nodejs npm python3 python3-venv libopus0 docker.io git
 OpenClaw installieren und anmelden:
 
 ```bash
-npm install -g openclaw@2026.9.6
+npm install -g openclaw@2026.10.4
 openclaw --version
 openclaw models auth login --provider openai
 openclaw gateway status
@@ -50,8 +53,9 @@ cd xiaozhi-openclaw-voice-terminal
 
 Der Installer:
 
-1. kopiert beide Bridge-Skripte nach `~/.local/share/jarvis-realtime-bridge`
-   (`server.py`, `openclaw-talk-realtime.mjs`, `requirements.txt`);
+1. kopiert die Bridge-Module, Konfiguration, Tests und Profile nach
+   `/home/openclaw/.local/share/jarvis-realtime-bridge`; vorhandene Raumzuordnungen
+   bleiben erhalten. Katalog-Units werden mitgeliefert, nicht automatisch aktiviert;
 2. erzeugt eine Python-Umgebung und installiert exakt `requirements.txt`
    (`websockets==15.0.1`, `opuslib==3.0.1`);
 3. installiert die systemd-Userunit `jarvis-realtime-bridge.service`
@@ -59,7 +63,8 @@ Der Installer:
 4. aktiviert und startet sie;
 5. verändert keine OpenClaw-Zugangsdaten.
 
-Abweichender Installationsort:
+Der Pfad ist an die Gateway-Importe gebunden; andere Installationsorte werden
+abgewiesen. Expliziter Referenzpfad:
 
 ```bash
 ./scripts/install-host.sh --public-host 192.168.178.143 --install-dir "$HOME/.local/share/jarvis-realtime-bridge"

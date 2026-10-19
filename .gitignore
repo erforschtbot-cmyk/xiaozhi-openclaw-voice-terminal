@@ -8,3 +8,6 @@ __pycache__/
 
 # Laufzeitdaten der Raum-/Session-Bindung
 voice-bindings/
+
+node_modules/
+.venv-esptool/

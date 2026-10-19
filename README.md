@@ -1,5 +1,9 @@
 # Jarvis: Waveshare XiaoZhi als OpenClaw-Sprachterminal
 
+> **Neuaufbau ab leerem Gerät:** zuerst [START HIER / Audit 20.10.2026](docs/00-START-HIER.md) lesen.
+> Der bisherige Stand ist **nicht vollständig als Nullstart abgenommen**.
+> Dort stehen die festgestellten Lücken und der geprüfte Gateway-Wiederaufbau.
+
 Dieses Repository enthält **alle projektspezifischen Dateien und Anleitungen**,
 um das funktionierende Jarvis-System auf einem leeren Linux-/OpenClaw-Host exakt
 wiederherzustellen — so, wie es am **2026-09-27** auf dem Referenzhost läuft.
@@ -146,7 +150,7 @@ auf dem OpenClaw-Host.
    dieses Repositories liegt. Ohne diese Datei ist der Stand nicht exakt nachbaubar.
 1. [`docs/01-HOST-INSTALLATION.md`](docs/01-HOST-INSTALLATION.md)
 2. [`docs/02-FIRMWARE.md`](docs/02-FIRMWARE.md)
-3. *(optional, nur bei Problemen)* [`docs/03-OPENCLAW-PATCH.md`](docs/03-OPENCLAW-PATCH.md)
+3. *(historisch; für exakten Wiederaufbau siehe START HIER)* [`docs/03-OPENCLAW-PATCH.md`](docs/03-OPENCLAW-PATCH.md)
 4. [`docs/04-TESTPLAN.md`](docs/04-TESTPLAN.md)
 5. [`docs/05-FEHLERSUCHE.md`](docs/05-FEHLERSUCHE.md)
 6. [`docs/06-BUILD-VERIFICATION.md`](docs/06-BUILD-VERIFICATION.md)
@@ -165,11 +169,9 @@ Für einen bereits eingerichteten Host genügt typischerweise:
 systemctl --user restart openclaw-gateway.service
 ```
 
-> **Zu `docs/03-OPENCLAW-PATCH.md`:** Die dort beschriebenen `dist`-Patches sind
-> **kein Pflichtschritt**. Der Voice-Betrieb funktioniert **ohne** sie. Sie sind
-> ausschließlich eine **Hilfe/Notfallmaßnahme** und werden **nur bei den dort
-> genannten konkreten Symptomen** angewendet — nicht routinemäßig, nicht nach
-> jedem Update. Kein Symptom → nichts tun.
+> **Gateway-Baseline:** Für den exakten Referenzstand sind die aktiven
+> Änderungen erforderlich. Das neue, hashgeprüfte Wiederherstellungsskript
+> und die Versionsgrenzen stehen in [START HIER](docs/00-START-HIER.md).
 
 ## Bestätigte Firmware (Ist-Stand)
 

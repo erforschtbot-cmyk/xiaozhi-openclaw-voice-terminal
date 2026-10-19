@@ -228,9 +228,9 @@ jarvisRouter = await import(
 Daraus folgen zwei Dinge:
 
 1. Der Installationsort der Bridge ist **nicht frei wählbar** (siehe oben).
-2. Fehlt eines der Module, fängt der Handler den Fehler **ab**
-   (`Jarvis direct router unavailable; using normal agent consult`) — es gibt
-   **keinen Absturz**, nur einen stillen Rückfall auf den langsamen Weg.
+2. Fehlt der **dynamisch** importierte Router, greift der Agent-Fallback.
+   `voice-turn-context.mjs` wird dagegen **statisch** importiert; fehlt es, kann
+   bereits das Laden des Handlers scheitern. Beide Module vor Gateway-Start installieren.
 
 ### Gateway prüfen
 
@@ -244,9 +244,8 @@ ss -ltn | grep 18789
 # Weiche W1/W2 samt Router-Tests (46 Fälle, kein Gerätezugriff)
 ./scripts/verify-jarvis-smart-home-router.py
 
-# Nach einem Update: erst anwenden, dann prüfen, dann Gateway neu starten
-./scripts/apply-openclaw-voice-dist-patches.py
-./scripts/apply-jarvis-smart-home-router.py
+# Nur bei Version 2026.10.4; andere Versionen zuerst separat prüfen
+python3 scripts/restore-openclaw-baseline.py --openclaw-root "$(npm root -g)/openclaw" --apply
 systemctl --user restart openclaw-gateway.service
 ```
 
