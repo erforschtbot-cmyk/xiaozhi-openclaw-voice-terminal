@@ -153,6 +153,108 @@ sprechenden Geräts vorangestellt — nicht der des Endpunkts.
 
 ---
 
+## Die Gateway-Seite (openclaw-gateway.service)
+
+Die Bridge allein spricht nicht. Sie verbindet sich mit dem **OpenClaw Gateway**,
+das die Talk-Session führt (GPT-Live), den Agenten aufruft und die Werkzeuge
+ausführt. Ohne Gateway gibt es keine Antworten.
+
+```text
+Gerät ──ws──▶ Bridge (8765) ──wss──▶ Gateway (18789) ──▶ GPT-Live / Agent / Werkzeuge
+```
+
+| Merkmal | Ist-Stand 2026-10-19 |
+|---|---|
+| Dienst | `openclaw-gateway.service` (user) |
+| Version | `OpenClaw 2026.10.4` (`383c124`) |
+| Port | `18789` (Talk-Relay über WebSocket) |
+| Zertifikat für die Bridge | `~/.openclaw/ssl/gateway.crt` (`--gateway-ca`) |
+| Realtime-Modell | `gpt-live-1-codex`, Stimme `cove` |
+
+### Was am Gateway gepatcht ist
+
+Die Weiche und die Voice-Korrekturen liegen **nicht** in diesem Repository,
+sondern in der globalen npm-Installation:
+
+```text
+/home/openclaw/.npm-global/lib/node_modules/openclaw/dist/
+```
+
+Sie werden von **jedem OpenClaw-Update überschrieben** und müssen danach neu
+angewendet und geprüft werden. Die Skripte dafür liegen hier unter `scripts/`.
+
+| Patch | Datei | Marker | Aktiv? |
+|---|---|---|---|
+| A — zusätzliche Sprachbestätigung aus | `agent-tools.before-tool-call-*.mjs` | `voice-confirmation-disabled-by-owner-v1` | **ja** |
+| B — Frage und Antwort beide persistieren | `handlers-*.mjs` | `voice-persist-split-v4` | **ja** (3 Stellen) |
+| W1 — Weiche am Consult-Eingang | `handlers-*.mjs` | `jarvis-safe-router-v1` | **ja** |
+| W2 — Abschluss ohne Agentenlauf | `handlers-*.mjs` | `jarvis-direct-completion-v2` | **ja** |
+| C — gesprochener Satz sichtbar | `builtin-openclaw-*.mjs` | `keep-spoken-test` | nein |
+| D — Apostroph ASCII | `capability-catalog.js` | `I'll` statt `I’ll` | nein |
+
+**Der aktive Handler ist `handlers-De0Uc7cE.mjs`** — geladen über
+`core-handlers-*.mjs`. Im `dist`-Verzeichnis liegt außerdem
+`handlers-b6HCLc_Q.mjs`; das ist eine **andere**, unabhängige Datei (GitHub-Erweiterung)
+ohne Jarvis-Marker. Wer nach `handlers-*.mjs` greppt, muss den Marker prüfen, nicht
+den Dateinamen.
+
+> **Widerspruch in der Doku, bewusst offengelegt:** `docs/03-OPENCLAW-PATCH.md`
+> bezeichnet die Patches als „nur Notfall-Hilfe, kein Pflichtschritt“. Das trifft
+> auf **C und D** zu. **A, B, W1 und W2 sind auf dem Referenzhost aktiv** und
+> werden gebraucht: W1/W2 tragen den Schnellweg, A unterdrückt die zusätzliche
+> Sprachbestätigung, B verhindert doppelte Transkripte.
+
+Was passiert, wenn sie **fehlen**:
+
+| Fehlt | Folge |
+|---|---|
+| W1 + W2 | Kein Absturz. Jeder Schaltbefehl geht den langsamen KI-Weg (mehrere Sekunden statt Millisekunden). |
+| nur W2 | Gerät bleibt nach einem Schaltbefehl im Zustand „Sprechen“ stehen (kein `stream_end`) — belegt 2026-10-18 |
+| A | Vor jeder zustandsändernden Aktion kommt eine gesprochene Rückfrage |
+| B | Antworten können doppelt erscheinen oder im Ohne-Tool-Fall ganz fehlen |
+
+### Absolute Importe — die harte Kopplung
+
+Der gepatchte Handler lädt zwei Module **per absolutem Pfad** aus dem
+Bridge-Verzeichnis:
+
+```js
+import { voiceTurnStorage, readVoiceBinding } from
+  "file:///home/openclaw/.local/share/jarvis-realtime-bridge/voice-turn-context.mjs";
+jarvisRouter = await import(
+  "file:///home/openclaw/.local/share/jarvis-realtime-bridge/scoped-smart-home-router.mjs");
+```
+
+Daraus folgen zwei Dinge:
+
+1. Der Installationsort der Bridge ist **nicht frei wählbar** (siehe oben).
+2. Fehlt eines der Module, fängt der Handler den Fehler **ab**
+   (`Jarvis direct router unavailable; using normal agent consult`) — es gibt
+   **keinen Absturz**, nur einen stillen Rückfall auf den langsamen Weg.
+
+### Gateway prüfen
+
+```bash
+systemctl --user is-active openclaw-gateway.service
+ss -ltn | grep 18789
+
+# Patches A und B (Skript aus diesem Repo)
+./scripts/verify-openclaw-voice-dist-patches.py
+
+# Weiche W1/W2 samt Router-Tests (46 Fälle, kein Gerätezugriff)
+./scripts/verify-jarvis-smart-home-router.py
+
+# Nach einem Update: erst anwenden, dann prüfen, dann Gateway neu starten
+./scripts/apply-openclaw-voice-dist-patches.py
+./scripts/apply-jarvis-smart-home-router.py
+systemctl --user restart openclaw-gateway.service
+```
+
+Der Gateway-Neustart ist **Owner-Sache**. Er reißt laufende Sessions ab und wird
+nie automatisch ausgelöst.
+
+---
+
 ## Prüfliste nach einer Installation
 
 ```bash
@@ -182,6 +284,10 @@ ss -ltn | grep -E ':8765|:8766'
 node --check ~/.local/share/jarvis-realtime-bridge/openclaw-talk-realtime.mjs
 node --check ~/.local/share/jarvis-realtime-bridge/smart-home-router.mjs
 node --check ~/.local/share/jarvis-realtime-bridge/scoped-smart-home-router.mjs
+
+# 6. Gateway-Seite: Patches und Weiche
+./scripts/verify-openclaw-voice-dist-patches.py
+./scripts/verify-jarvis-smart-home-router.py
 ```
 
 Die Selbstprüfung in `install-host.sh` deckt Punkt 1 automatisch ab. Punkt 3 ist
