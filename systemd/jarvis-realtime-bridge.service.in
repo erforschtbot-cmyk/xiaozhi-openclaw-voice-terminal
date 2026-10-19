@@ -4,8 +4,9 @@ After=network-online.target openclaw-gateway.service
 
 [Service]
 Type=simple
+Environment=OPENCLAW_NPM_ROOT=/home/openclaw/.npm-global/lib/node_modules
 WorkingDirectory=@INSTALL_DIR@
-ExecStart=@INSTALL_DIR@/.venv/bin/python @INSTALL_DIR@/server.py --host 0.0.0.0 --port 8765 --ota-port 8766 --public-host @PUBLIC_HOST@ --model gpt-live-1-codex --voice cove --session-key agent:voice:xiaozhi-realtime-v6 --consult-session-key agent:voice:xiaozhi-consult-v6 --gateway-ca %h/.openclaw/ssl/gateway.crt --helper @INSTALL_DIR@/openclaw-talk-realtime.mjs
+ExecStart=@INSTALL_DIR@/.venv/bin/python @INSTALL_DIR@/server.py --host 0.0.0.0 --port 8765 --ota-port 8766 --public-host @PUBLIC_HOST@ --session-key agent:voice:xiaozhi-realtime-v6 --consult-session-key agent:voice:xiaozhi-consult-v6 --stt-uri 127.0.0.1:10303 --stt-language de --tts-voice de_DE-kerstin-low --tts-voice-dir /home/openclaw/.local/share/piper-voices --tts-split sentence --gateway-ca %h/.openclaw/ssl/gateway.crt
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true

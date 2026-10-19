@@ -1,0 +1,9 @@
+{
+  "_note": "Raum pro Geraet, Schluessel ist die Device-Id aus dem WebSocket-Handshake (MAC der Firmware). Die Session bleibt unveraendert; mehrere Geraete teilen sie weiterhin. Ein Geraet ohne Eintrag bekommt keinen Raum vorgestellt und geht an die KI.",
+  "rooms": {
+    "90:70:69:eb:1c:0c": "Wohnzimmer",
+    "94:a9:90:cc:8d:b4": "Arbeitszimmer",
+    "90:70:69:eb:1e:cc": "Badezimmer",
+    "90:70:69:eb:1e:b4": "Schlafzimmer"
+  }
+}

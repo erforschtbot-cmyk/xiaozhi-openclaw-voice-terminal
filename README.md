@@ -141,12 +141,21 @@ auf dem OpenClaw-Host.
 
 ## Neuinstallation in richtiger Reihenfolge
 
+0. [`docs/00-DATEIBESTAND.md`](docs/00-DATEIBESTAND.md) — **zuerst lesen.** Welche Datei
+   existieren muss, welche der Betrieb selbst erzeugt, welche Voraussetzung außerhalb
+   dieses Repositories liegt. Ohne diese Datei ist der Stand nicht exakt nachbaubar.
 1. [`docs/01-HOST-INSTALLATION.md`](docs/01-HOST-INSTALLATION.md)
 2. [`docs/02-FIRMWARE.md`](docs/02-FIRMWARE.md)
 3. *(optional, nur bei Problemen)* [`docs/03-OPENCLAW-PATCH.md`](docs/03-OPENCLAW-PATCH.md)
 4. [`docs/04-TESTPLAN.md`](docs/04-TESTPLAN.md)
 5. [`docs/05-FEHLERSUCHE.md`](docs/05-FEHLERSUCHE.md)
 6. [`docs/06-BUILD-VERIFICATION.md`](docs/06-BUILD-VERIFICATION.md)
+
+> **Der Installationsort ist nicht frei wählbar:**
+> `/home/openclaw/.local/share/jarvis-realtime-bridge`. Der Gateway-Patch importiert
+> `voice-turn-context.mjs` und `scoped-smart-home-router.mjs` per absolutem Pfad.
+> Ein anderer Ort lässt den Schnellweg **still** ausfallen (Sprache funktioniert,
+> Schaltbefehle gehen den langsamen KI-Weg). Details: `docs/00-DATEIBESTAND.md`.
 
 Für einen bereits eingerichteten Host genügt typischerweise:
 

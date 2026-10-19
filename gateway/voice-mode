@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in local|realtime) ;; *) echo 'Usage: voice-mode local|realtime'; exit 2;; esac
+base="$HOME/.local/share/jarvis-realtime-bridge"
+cp "$base/profile-$1.service" "$HOME/.config/systemd/user/jarvis-realtime-bridge.service"
+systemctl --user daemon-reload
+systemctl --user restart jarvis-realtime-bridge.service
+systemctl --user is-active jarvis-realtime-bridge.service

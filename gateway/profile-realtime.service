@@ -1,0 +1,19 @@
+[Unit]
+Description=Jarvis XiaoZhi realtime audio bridge (isolated from OpenClaw files)
+After=network-online.target openclaw-gateway.service
+
+[Service]
+Type=simple
+Environment=OPENCLAW_NPM_ROOT=/home/openclaw/.npm-global/lib/node_modules
+WorkingDirectory=/home/openclaw/.local/share/jarvis-realtime-bridge
+ExecStart=/home/openclaw/.local/share/jarvis-realtime-bridge/.venv/bin/python /home/openclaw/.local/share/jarvis-realtime-bridge/server.py --host 0.0.0.0 --port 8765 --ota-port 8766 --public-host 192.168.178.143 --session-key agent:voice:xiaozhi-realtime-v6 --consult-session-key agent:voice:xiaozhi-consult-v6 --stt-uri 127.0.0.1:10303 --stt-language de --tts-voice de_DE-kerstin-low --tts-voice-dir /home/openclaw/.local/share/piper-voices --tts-split sentence --gateway-ca %h/.openclaw/ssl/gateway.crt
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.openclaw %h/.local/share/jarvis-realtime-bridge
+
+[Install]
+WantedBy=default.target
