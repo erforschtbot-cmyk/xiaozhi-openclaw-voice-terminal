@@ -19,7 +19,8 @@ for command in ['node', 'npm', 'python3', 'git', 'systemctl', 'docker']:
     check(shutil.which(command) is not None, 'Programm: ' + command)
 package = home / '.npm-global/lib/node_modules/openclaw/package.json'
 try:
-    check(json.loads(package.read_text())['version'] == '2026.10.4', 'OpenClaw-Version 2026.10.4 am Referenzpfad')
+    version = json.loads(package.read_text())['version']
+    check(version == '2026.10.5', f'OpenClaw-Version 2026.10.5 am Referenzpfad (gefunden: {version})')
 except (OSError, ValueError, KeyError):
     check(False, 'OpenClaw-Paket am Referenzpfad')
 try:

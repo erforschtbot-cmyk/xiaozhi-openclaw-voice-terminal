@@ -23,7 +23,7 @@ Ein `.bin` ist das fertige Flash-Artefakt, nicht der bearbeitbare Quellcode.
 | OTA-Konfigurationsserver | verrät dem Gerät seine WebSocket-Adresse | Bestandteil von `gateway/server.py`, TCP 8766 |
 | Audio-Bridge | übersetzt XiaoZhi/Opus zum OpenClaw-Talk-Pfad | `gateway/server.py`, TCP 8765 |
 | Gateway-Helfer | authentifizierte Talk-Verbindung | `gateway/openclaw-talk-realtime.mjs` |
-| OpenClaw-Gateway | Talk/Provider und Agent/Werkzeuge | separates npm-Paket `openclaw@2026.10.4`, TLS TCP 18789 |
+| OpenClaw-Gateway | Talk/Provider und Agent/Werkzeuge | separates npm-Paket `openclaw@2026.10.5`, TLS TCP 18789 |
 | Raum-/Gesprächsbindung | verhindert Zuordnung zum falschen Gerät | `room-map.json`, `voice-turn-context.mjs`, `scoped-smart-home-router.mjs` |
 | Agent-Werkzeug-Plugin | Alexa-Aufrufe des Agenten | `plugins/iobroker-alexa/`, TypeScript, JS, Tests und Lockdatei |
 | Smart-Home-Steuerung | erlaubte Einzelbefehle an ioBroker/Alexa | `smart-home-router.mjs`, `room-command.mjs`, Katalogskript und Timer |
@@ -45,7 +45,7 @@ OpenClaw-ESP-Node. „OTA-Gateway“ meint hier den Konfigurationsserver in der 
 2. Linux-Host mit Node/npm, Python/venv/libopus, Git und Docker vorbereiten.
    Die Referenz erwartet Benutzer `/home/openclaw` und npm unter
    `/home/openclaw/.npm-global`; die Pfade sind derzeit nicht portabel.
-3. OpenClaw **2026.10.4** installieren, Gateway konfigurieren, Provider anmelden
+3. OpenClaw **2026.10.5** installieren, Gateway konfigurieren, Provider anmelden
    und das Talk-/Consult-Sessionziel `agent:voice:…` prüfen. **Die bisherige Host-Anleitung automatisiert
    diesen Nullstart nicht vollständig.** Sie setzt ein funktionierendes Gateway voraus.
 4. TLS und Token bereitstellen: der Helfer erwartet `wss://127.0.0.1:18789`,

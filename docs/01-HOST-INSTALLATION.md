@@ -6,7 +6,7 @@
 ## Voraussetzungen
 
 - Linux mit systemd-Userdiensten
-- OpenClaw `2026.10.4`
+- OpenClaw `2026.10.5`
 - Node.js und npm
 - Python 3 mit `venv` (Referenzhost: `3.14.7`)
 - `libopus`
@@ -32,7 +32,7 @@ sudo apt install -y nodejs npm python3 python3-venv libopus0 docker.io git
 OpenClaw installieren und anmelden:
 
 ```bash
-npm install -g openclaw@2026.10.4
+npm install -g openclaw@2026.10.5
 openclaw --version
 openclaw models auth login --provider openai
 openclaw gateway status

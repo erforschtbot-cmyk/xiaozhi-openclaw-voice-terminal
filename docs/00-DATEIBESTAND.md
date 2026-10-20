@@ -168,10 +168,10 @@ Gerät ──ws──▶ Bridge (8765) ──wss──▶ Gateway (18789) ──
 | Merkmal | Ist-Stand 2026-10-19 |
 |---|---|
 | Dienst | `openclaw-gateway.service` (user) |
-| Version | `OpenClaw 2026.10.4` (`383c124`) |
+| Version | `OpenClaw 2026.10.5` (`1b58cb9`) |
 | Port | `18789` (Talk-Relay über WebSocket) |
 | Zertifikat für die Bridge | `~/.openclaw/ssl/gateway.crt` (`--gateway-ca`) |
-| Realtime-Modell | `gpt-live-1-codex`, Stimme `cove` |
+| Realtime-Modell | `gpt-realtime-2.1`, Stimme `cove` |
 
 ### Was am Gateway gepatcht ist
 
@@ -246,7 +246,7 @@ ss -ltn | grep 18789
 # Weiche W1/W2 samt Router-Tests (46 Fälle, kein Gerätezugriff)
 ./scripts/verify-jarvis-smart-home-router.py
 
-# Nur bei Version 2026.10.4; andere Versionen zuerst separat prüfen
+# Versionsgebunden: Skript waehlt patches/openclaw-<version>/, sonst Abbruch
 python3 scripts/restore-openclaw-baseline.py --openclaw-root "$(npm root -g)/openclaw" --apply
 systemctl --user restart openclaw-gateway.service
 ```

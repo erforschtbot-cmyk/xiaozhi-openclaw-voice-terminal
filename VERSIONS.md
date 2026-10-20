@@ -1,10 +1,11 @@
 # Verbindliche Versionen
 
-Diese Werte sind der **Ist-Stand vom 2026-09-28** auf dem Referenzhost.
+Diese Werte sind der **Ist-Stand vom 2026-10-20** auf dem Referenzhost.
 
 | Komponente | Version / Pin |
 |---|---|
-| OpenClaw | `2026.10.4` (Ist-Stand 2026-10-17) |
+| OpenClaw | `2026.10.5` (`1b58cb9`) |
+| Gateway-Patchsatz | `patches/openclaw-2026.10.5/` (versionsgebunden, siehe unten) |
 | Node.js | `26.7.0` auf dem Referenzhost |
 | Python | `3.14.7` auf dem Referenzhost |
 | XiaoZhi Upstream | `78/xiaozhi-esp32@4632dc51f0a5ad26e08542e131e6e48da41e4ff3` |
@@ -14,7 +15,7 @@ Diese Werte sind der **Ist-Stand vom 2026-09-28** auf dem Referenzhost.
 | Zweites Gerät | Waveshare ESP32-S3-AUDIO-Board (SKU 32184/32185), kein Display, 7 RGB-Ring-LEDs |
 | Audio-Board-Boardziel | `waveshare/esp32-s3-audio-board` (im selben Upstream-Pin enthalten) |
 | Bridge-Python-Pakete | `websockets==15.0.1`, `opuslib==3.0.1` |
-| Realtime-Modell | `gpt-live-1-codex` |
+| Realtime-Modell | `gpt-realtime-2.1` (Vorgabe in `gateway/openclaw-talk-realtime.mjs`; per `OPENCLAW_REALTIME_MODEL` überschreibbar) |
 | Stimme | `cove` |
 | Talk-Session-Key | `agent:voice:xiaozhi-realtime-v6` (konstant, ohne UUID-Anhang) |
 | Talk-Consult-Key | `agent:voice:xiaozhi-consult-v6` (konstant, ohne UUID-Anhang) |
