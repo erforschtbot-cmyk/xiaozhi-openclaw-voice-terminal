@@ -197,6 +197,16 @@ class XiaozhiSession:
         self.helper_ready_at = 0.0
         self.helper_started_at = 0.0
 
+        # --- Turn-Messkette (2026-10-20) ---
+        # Eine Zeile pro Turn mit allen Abschnitten: Transkript -> erstes
+        # Audio -> TTS-Start -> stream_end -> physisch abgespielt. Ohne diese
+        # Aufteilung laesst sich nicht sagen, ob die Latenz beim Provider,
+        # beim lokalen Piper oder beim Geraet entsteht (Vorbild:
+        # voicepe-realtime, turn_metrics).
+        self.tts_started_at = 0.0
+        self.stream_end_at = 0.0
+        self.drained_at = 0.0
+
         # --- Diagnose: Wann kommt Provider-Audio relativ zum Transkript? ---
         # Ohne diese Zeitmarken laesst sich nicht unterscheiden, ob die
         # echte Antwort zu frueh beginnt oder ein Filler das Mikrofon
@@ -733,6 +743,9 @@ class XiaozhiSession:
         self.pcm_bytes_received = 0
         self.audio_progress_event = asyncio.Event()
         self.stream_end_sent = False
+        self.tts_started_at = 0.0
+        self.stream_end_at = 0.0
+        self.drained_at = 0.0
         self.transcript_final_at = 0.0
         self.first_audio_at = 0.0
         self.first_audio_bytes = 0
@@ -878,6 +891,42 @@ class XiaozhiSession:
             return 0
         return max((abs(s) for s in samples), default=0)
 
+    def log_turn_metrics(self):
+        """Eine Zeile pro Turn: wo die Zeit hingeht.
+
+        Abschnitte (alle in ms, negativ = Ereignis fehlte):
+          stt_to_audio  Transkript final -> erstes Provider-Audio
+          audio_to_tts  erstes Provider-Audio -> erstes PCM an das Geraet
+          tts_to_end    erstes PCM -> stream_end an das Geraet
+          end_to_drain  stream_end -> Geraet meldet physisch abgespielt
+          total         Transkript final -> physisch abgespielt
+
+        Nur Diagnose: die Werte werden geloggt, nie zur Steuerung benutzt.
+        """
+        if self.transcript_final_at <= 0:
+            return  # Turn ohne finales Transkript (z. B. reine Begruessung)
+
+        def delta(a, b):
+            if a <= 0 or b <= 0:
+                return None
+            return round((b - a) * 1000, 1)
+
+        parts = {
+            "stt_to_audio": delta(self.transcript_final_at, self.first_audio_at),
+            "audio_to_tts": delta(self.first_audio_at, self.tts_started_at),
+            "tts_to_end": delta(self.tts_started_at, self.stream_end_at),
+            "end_to_drain": delta(self.stream_end_at, self.drained_at),
+            "total": delta(self.transcript_final_at, self.drained_at),
+        }
+        rendered = " ".join(
+            f"{k}={'n/a' if v is None else v}" for k, v in parts.items()
+        )
+        print(
+            f"{self.tag} TURN METRICS {rendered} "
+            f"pcm_bytes={self.pcm_bytes_received} turn={self.turn_id}",
+            flush=True,
+        )
+
     # Ab diesem Pegel gilt ein Provider-Block als Sprache. Gemessen: reine
     # Stille liegt bei Peak 0, normale Sprache bei 700..17000. Der Wert ist
     # bewusst niedrig, damit ein leiser Sprechbeginn nicht abgeschnitten wird.
@@ -905,6 +954,7 @@ class XiaozhiSession:
             )
             await self.send_json({"type": "tts", "state": "start"})
             self.tts_started = True
+            self.tts_started_at = loop_now
             self.arm_speaking_guard()
         packet = self.encoder.encode(pcm, 1440)
         async with self.send_lock:
@@ -1218,6 +1268,7 @@ class XiaozhiSession:
             return
 
         self.stream_end_sent = True
+        self.stream_end_at = asyncio.get_running_loop().time()
         self.cancel_speaking_guard()
         await self.send_json({"type": "tts", "state": "stream_end"})
         self.schedule_drained_watchdog(expected_pcm_bytes)
@@ -1722,6 +1773,8 @@ class XiaozhiSession:
                     and payload.get("event") == "playback_drained"
                 ):
                     self.cancel_drained_watchdog()
+                    self.drained_at = asyncio.get_running_loop().time()
+                    self.log_turn_metrics()
                     print(
                         f"{self.tag} Physical playback drained; opening follow-up listening window",
                         flush=True,
