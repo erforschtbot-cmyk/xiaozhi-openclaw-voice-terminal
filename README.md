@@ -154,6 +154,8 @@ auf dem OpenClaw-Host.
 4. [`docs/04-TESTPLAN.md`](docs/04-TESTPLAN.md)
 5. [`docs/05-FEHLERSUCHE.md`](docs/05-FEHLERSUCHE.md)
 6. [`docs/06-BUILD-VERIFICATION.md`](docs/06-BUILD-VERIFICATION.md)
+11. [`docs/13-FOTO-PER-SPRACHE.md`](docs/13-FOTO-PER-SPRACHE.md) — Foto per Sprache
+    (Kamera, Upload-Endpunkt, Bild-Consult; Firmware kann es bereits)
 
 > **Der Installationsort ist nicht frei wählbar:**
 > `/home/openclaw/.local/share/jarvis-realtime-bridge`. Der Gateway-Patch importiert

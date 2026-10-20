@@ -178,6 +178,20 @@ class XiaozhiSession:
         # ueberhaupt zugehoert wird. Deshalb startet er schon beim
         # Verbindungsaufbau (hello). `helper_starting` verhindert, dass zwei
         # gleichzeitige Aufrufe (hello und erstes Paket) zwei Helfer starten.
+        # --- Kamera / Foto -----------------------------------------------
+        # Die Firmware kann bereits Fotos: Sie meldet dem Server per MCP einen
+        # vision-Endpunkt, schiesst ein JPEG und laedt es per multipart hoch.
+        # Ohne diesen Endpunkt meldet das Geraet "Image explain URL or token
+        # is not set" und das Werkzeug self.camera.take_photo scheitert.
+        self.photo_pending = None      # Future auf das naechste JPEG
+        self.photo_path = None         # zuletzt empfangenes Foto
+        self.photo_question = ""
+        self.photo_budget = 0          # >0 = ein Foto wird erwartet
+        # Waehrend einer Foto-Runde darf kein Provider-Audio dazwischenreden:
+        # die Antwort kommt aus dem Bild-Consult und wird lokal gesprochen.
+        self.photo_speaking = False
+        self._photo_voice = None
+
         self.helper_ready = asyncio.Event()
         self.helper_starting = False
         self.helper_ready_at = 0.0
@@ -236,25 +250,52 @@ class XiaozhiSession:
         finally:
             self.mcp_pending.pop(request_id, None)
 
+    def photo_endpoint(self):
+        """HTTP-Adresse, unter der das Geraet sein JPEG hochlaedt.
+
+        Das Geraet erreicht uns nur im eigenen Netz. Deshalb die Adresse
+        verwenden, ueber die die WebSocket-Verbindung hereinkam.
+        """
+        host = None
+        try:
+            local = getattr(self.websocket, "local_address", None)
+            if local and local[0] and local[0] not in ("0.0.0.0", "::"):
+                host = local[0]
+        except Exception:
+            host = None
+        if not host:
+            host = self.args.public_host
+        return f"http://{host}:{self.args.ota_port}/photo"
+
     async def initialize_mcp(self):
         try:
+            # capabilities.vision ist der einzige Weg, dem Geraet die
+            # Upload-Adresse mitzuteilen (McpServer::ParseCapabilities).
             response = await self.send_mcp_request(
-                "initialize", {"capabilities": {}}, timeout=3.0
+                "initialize",
+                {"capabilities": {"vision": {
+                    "url": self.photo_endpoint(),
+                    "token": "local-openclaw",
+                }}},
+                timeout=3.0,
             )
             if "error" in response:
                 raise RuntimeError(response["error"])
             self.mcp_ready.set()
-            print(f"{self.tag} Device MCP initialized", flush=True)
+            print(
+                f"{self.tag} Device MCP initialized (vision -> {self.photo_endpoint()})",
+                flush=True,
+            )
         except Exception as exc:
             print(f"{self.tag} Device MCP initialization failed: {exc}", flush=True)
 
-    async def call_device_tool(self, name, arguments):
+    async def call_device_tool(self, name, arguments, timeout=3.0):
         await asyncio.wait_for(self.mcp_ready.wait(), timeout=3.0)
         try:
             response = await self.send_mcp_request(
                 "tools/call",
                 {"name": name, "arguments": arguments},
-                timeout=3.0,
+                timeout=timeout,
             )
         except asyncio.TimeoutError:
             # Setting an absolute value is idempotent. One retry handles an
@@ -262,7 +303,7 @@ class XiaozhiSession:
             response = await self.send_mcp_request(
                 "tools/call",
                 {"name": name, "arguments": arguments},
-                timeout=3.0,
+                timeout=timeout,
             )
         if "error" in response:
             raise RuntimeError(response["error"])
@@ -334,8 +375,192 @@ class XiaozhiSession:
             )
         )
 
+    # Foto-Wunsch in natuerlicher Sprache. Bewusst eng: nur ausdrueckliche
+    # Foto-/Bild-Absichten, damit "mach das Licht an" nicht hier landet.
+    PHOTO_PATTERN = re.compile(
+        r"\b(?:mach|mache|nimm|nehme|schiess|schieße|knips|schick|schicke)\b"
+        r"[^.]{0,40}\b(?:foto|bild)\b"
+        r"|\b(?:foto|bild)\b[^.]{0,40}\b(?:mach|machen|aufnehmen|schiessen|schießen|schicken|schick)\b"
+        r"|\bwas\s+(?:siehst|erkennst)\s+du\b"
+        r"|\bschau\s+(?:mal|dir)\b"
+        r"|\bsieh\s+dir\s+(?:das|mal)\s+an\b"
+    )
+
+    def _photo_speaker(self):
+        """Piper-Stimme fuer die Foto-Antwort, lazily geladen.
+
+        Der Realtime-Weg hat keine lokale Stimme; fuer die Bildantwort wird
+        die installierte Piper-Stimme bei Bedarf geladen. Schlaegt das fehl,
+        bleibt der Text sichtbar und es wird nichts gesprochen.
+        """
+        if self._photo_voice is not None:
+            return self._photo_voice
+        if PiperSpeaker is None or find_default_voice is None:
+            return None
+        try:
+            model_path = find_default_voice(
+                self.args.tts_voice_dir, self.args.tts_voice
+            )
+            self._photo_voice = PiperSpeaker(model_path)
+            print(
+                f"{self.tag} Photo voice ready: {self._photo_voice.describe()}",
+                flush=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"{self.tag} Photo voice failed: {exc!r}", flush=True)
+            return None
+        return self._photo_voice
+
+    @staticmethod
+    def _photo_answer_text(result):
+        """Antworttext aus einem MCP-Tool-Ergebnis ziehen."""
+        def walk(node):
+            if isinstance(node, str):
+                return node
+            if isinstance(node, dict):
+                for key in ("content", "result", "text"):
+                    if key in node:
+                        found = walk(node[key])
+                        if found:
+                            return found
+                return ""
+            if isinstance(node, list):
+                for item in node:
+                    found = walk(item)
+                    if found:
+                        return found
+            return ""
+
+        return walk(result).strip()
+
+    async def speak_photo_answer(self, text):
+        """Zeigt und spricht die Bildantwort, dann regulaerer Abschluss."""
+        text = (text or "").strip() or "Ich konnte auf dem Bild nichts erkennen."
+        await self.send_json({"type": "stt", "text": text})
+        speaker = self._photo_speaker()
+        if speaker is None:
+            self.photo_speaking = False
+            return
+        try:
+            pcm = await asyncio.to_thread(speaker.synthesize_pcm, text)
+        except Exception as exc:  # noqa: BLE001
+            print(f"{self.tag} Photo TTS failed: {exc!r}", flush=True)
+            self.photo_speaking = False
+            return
+        if not pcm:
+            self.photo_speaking = False
+            return
+        self.tts_started = False
+        self.stream_end_sent = False
+        await self.send_pcm_paced(pcm)
+        self.stream_end_sent = True
+        self.cancel_speaking_guard()
+        await self.send_json({"type": "tts", "state": "stream_end"})
+        self.schedule_drained_watchdog(len(pcm))
+        # Schutz wieder aufheben: sonst würden alle weiteren Provider-Audio-
+        # frames dauerhaft verworfen und die naechste normale Antwort bliebe
+        # stumm.
+        self.photo_speaking = False
+        print(
+            f"{self.tag} Photo answer spoken ({len(pcm)} PCM bytes)",
+            flush=True,
+        )
+
+    async def handle_photo_request(self, transcript):
+        """Kamera auslösen. Die Auswertung läuft getrennt (siehe /photo).
+
+        Das Gerät besitzt das Werkzeug self.camera.take_photo bereits. Es
+        schießt das JPEG und lädt es auf /photo hoch. Dieser Aufruf wartet
+        nur bis das Gerät den Upload bestätigt hat — nicht auf den Agenten.
+        """
+        if not self.mcp_ready.is_set():
+            print(f"{self.tag} Photo requested but MCP is not ready", flush=True)
+            await self.speak_photo_answer(
+                "Die Kamera ist noch nicht bereit. Bitte noch einmal versuchen."
+            )
+            return "photo"
+        question = transcript.strip() or "Was ist auf dem Bild zu sehen?"
+        print(f"{self.tag} Photo requested: {question!r}", flush=True)
+        self.photo_speaking = True
+        try:
+            await self.call_device_tool(
+                "self.camera.take_photo", {"question": question}, timeout=30.0
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"{self.tag} Photo tool failed: {exc!r}", flush=True)
+            await self.speak_photo_answer(
+                "Das Foto hat nicht geklappt. Bitte noch einmal versuchen."
+            )
+        # Die eigentliche Antwort kommt aus dem Upload-Handler, sobald das
+        # JPEG angekommen ist. Hier bewusst nicht darauf warten.
+        return "photo"
+
+    async def run_photo_agent(self, path, question):
+        """Agenten mit dem Bild befragen und die Antwort sprechen."""
+        script = Path(__file__).resolve().parent / "photo-consult.mjs"
+        if not script.is_file():
+            print(f"{self.tag} photo-consult.mjs missing", flush=True)
+            await self.speak_photo_answer("Die Bildauswertung fehlt auf dem Host.")
+            return
+        session_key = self.args.consult_session_key or self.args.session_key
+        env = os.environ.copy()
+        env.setdefault(
+            "OPENCLAW_NPM_ROOT", "/home/openclaw/.npm-global/lib/node_modules"
+        )
+        env.setdefault("NODE_EXTRA_CA_CERTS", str(self.args.gateway_ca))
+        process = None
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "node", str(script), session_key, str(path), "image/jpeg", question,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            out, err = await asyncio.wait_for(process.communicate(), timeout=90.0)
+        except asyncio.TimeoutError:
+            if process is not None and process.returncode is None:
+                process.kill()
+            print(f"{self.tag} Photo consult timed out", flush=True)
+            await self.speak_photo_answer(
+                "Das Foto ist da, die Auswertung hat zu lange gedauert."
+            )
+            return
+        except Exception as exc:  # noqa: BLE001
+            print(f"{self.tag} Photo consult failed: {exc!r}", flush=True)
+            await self.speak_photo_answer(
+                "Das Foto ist da, die Auswertung ist fehlgeschlagen."
+            )
+            return
+        if process.returncode != 0:
+            detail = (err or b"").decode("utf-8", "replace").strip()[:300]
+            print(
+                f"{self.tag} Photo consult exit={process.returncode} {detail}",
+                flush=True,
+            )
+            await self.speak_photo_answer(
+                "Das Foto ist da, die Auswertung ist fehlgeschlagen."
+            )
+            return
+        answer = (out or b"").decode("utf-8", "replace").strip()
+        print(f"{self.tag} Photo answer: {answer[:200]!r}", flush=True)
+        try:
+            await self.speak_photo_answer(answer)
+        finally:
+            self.photo_speaking = False
+
     async def handle_device_voice_command(self, transcript):
         normalized = " ".join(transcript.lower().replace("%", " prozent ").split())
+
+        # Foto-Wunsch: Kamera ausloesen, Bild auswerten, Antwort sprechen.
+        # Bewusst als Task: Der MCP-Aufruf wartet auf eine Antwort, die ueber
+        # den WebSocket-Loop hereinkommt. Wuerde dieser Event-Leser darauf
+        # warten, koennte er waehrenddessen keine Helfer-Events mehr abholen
+        # und die stderr-Pipe volllaufen lassen.
+        if self.PHOTO_PATTERN.search(normalized):
+            self.photo_speaking = True
+            asyncio.create_task(self.handle_photo_request(transcript))
+            return "photo"
 
         # Smart-home fast path: clear imperative commands must not wait for an
         # agent consult. Forward the original transcript once to the same fixed
@@ -540,6 +765,11 @@ class XiaozhiSession:
                 # consume it locally so playback_drained is not delayed while
                 # the Talk session remains open for a follow-up utterance.
                 if self.stream_end_sent:
+                    continue
+                if self.photo_speaking:
+                    # Waehrend einer Foto-Runde entsteht die Antwort aus dem
+                    # Bild-Consult. Ein zwischengesprochenes "Einen Moment"
+                    # des Realtime-Modells wuerde das Foto uebertoenen.
                     continue
                 loop_now = asyncio.get_running_loop().time()
                 if self.first_audio_at <= 0:
@@ -1165,6 +1395,16 @@ class XiaozhiSession:
                         publish_active_room(self.device_id, self.device_room)
                     await self.send_json({"type": "stt", "text": transcript})
                     device_command_handled = await self.handle_device_voice_command(transcript)
+                    if device_command_handled == "photo":
+                        # Die Foto-Runde spricht ihre Antwort selbst und sendet
+                        # dabei ihr eigenes stream_end. Kein Fast-Path-Abschluss:
+                        # der wuerde die laufende Wiedergabe abschneiden.
+                        self.input_stopped = True
+                        print(
+                            f"{self.tag} Photo turn started; awaiting camera result",
+                            flush=True,
+                        )
+                        continue
                     if device_command_handled:
                         # The direct HTTP action is already complete. Keep the
                         # realtime helper alive so its spoken acknowledgement
@@ -1237,7 +1477,15 @@ class XiaozhiSession:
                         flush=True,
                     )
                     if event.get("text") and not self.is_interim_text(event["text"]):
-                        if self.tts_local:
+                        if self.photo_speaking:
+                            # Eine Foto-Runde spricht ihre Antwort selbst. Das
+                            # generische stream_end des Realtime-Modells wuerde
+                            # die laufende Wiedergabe abschneiden.
+                            print(
+                                f"{self.tag} Photo turn active; suppressing provider stream_end",
+                                flush=True,
+                            )
+                        elif self.tts_local:
                             self.schedule_local_stream_end(process)
                         else:
                             self.schedule_stream_end(process)
@@ -1443,6 +1691,67 @@ class XiaozhiSession:
             await self.close(abort=True)
 
 
+ACTIVE_SESSIONS = {}
+
+
+def _split_multipart(body, boundary):
+    """Felder eines multipart/form-data-Rumpfs als {name: bytes}.
+
+    Das Geraet sendet genau zwei Teile: `question` (Text) und `file`
+    (JPEG, Dateiname camera.jpg). Der JPEG-Teil wird binaer belassen; es
+    wird nur die eine Trennzeile am Ende entfernt, die zum naechsten
+    Boundary gehoert.
+    """
+    marker = ("--" + boundary).encode()
+    parts = {}
+    for chunk in body.split(marker):
+        if chunk.startswith(b"--"):
+            break
+        chunk = chunk.lstrip(b"\r\n")
+        if not chunk:
+            continue
+        head, sep, payload = chunk.partition(b"\r\n\r\n")
+        if not sep:
+            continue
+        name = None
+        for line in head.decode("latin1", "replace").split("\r\n"):
+            if line.lower().startswith("content-disposition:"):
+                found = re.search(r'name="([^"]+)"', line)
+                if found:
+                    name = found.group(1)
+        if payload.endswith(b"\r\n"):
+            payload = payload[:-2]
+        if name:
+            parts[name] = payload
+    return parts
+
+async def _read_chunked(reader):
+    """Liest einen HTTP/1.1-chunked-Rumpf vollstaendig."""
+    data = bytearray()
+    while True:
+        line = await reader.readuntil(b"\r\n")
+        size_text = line.strip().split(b";")[0]
+        if not size_text:
+            break
+        try:
+            size = int(size_text, 16)
+        except ValueError:
+            break
+        if size == 0:
+            try:
+                await reader.readuntil(b"\r\n")
+            except Exception:
+                pass
+            break
+        data.extend(await reader.readexactly(size))
+        try:
+            await reader.readexactly(2)
+        except Exception:
+            break
+    return bytes(data)
+
+
+
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="0.0.0.0")
@@ -1601,21 +1910,115 @@ async def main():
             session = XiaozhiSession(websocket, args)
             session.device_id = device_id
             session.device_room = room
-            await session.run()
+            if device_id:
+                ACTIVE_SESSIONS[device_id.upper()] = session
+            try:
+                await session.run()
+            finally:
+                if device_id and ACTIVE_SESSIONS.get(device_id.upper()) is session:
+                    ACTIVE_SESSIONS.pop(device_id.upper(), None)
         except Exception as exc:
             print(f"{dev_tag} XiaoZhi session failed: {exc}", flush=True)
 
     stop = asyncio.get_running_loop().create_future()
     for sig in (signal.SIGTERM, signal.SIGINT):
         asyncio.get_running_loop().add_signal_handler(sig, stop.set_result, None)
+    async def handle_photo(body, boundary, device_id, peer):
+        """Nimmt das JPEG an und startet die Auswertung im Hintergrund.
+
+        Rueckgabe geht sofort an das Gerät: Es bestätigt den Upload und
+        beendet damit seinen HTTP-Aufruf. Der Agent braucht deutlich länger
+        als eine HTTP-Antwort zulässt — würde hier gewartet, liefe das Gerät
+        in seinen Timeout und das Werkzeug meldete "Failed to upload photo".
+        Die Antwort wird stattdessen über die offene WebSocket-Session
+        gesprochen, sobald sie vorliegt.
+        """
+        fields = _split_multipart(body, boundary)
+        image = fields.get("file") or b""
+        if not image:
+            print(f"Photo from {peer}: no image payload", flush=True)
+            return "Das Foto ist leer angekommen."
+        question = fields.get("question", b"").decode("utf-8", "replace").strip()
+        if not question:
+            question = "Was ist auf dem Bild zu sehen?"
+
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        safe_id = re.sub(r"[^0-9A-Za-z]", "", device_id or "device")
+        target = Path(
+            f"/home/openclaw/.local/share/jarvis-realtime-bridge/photo-{safe_id}-{stamp}.jpg"
+        )
+        try:
+            target.write_bytes(image)
+        except OSError as exc:
+            print(f"Photo from {peer}: cannot save {exc!r}", flush=True)
+            target = None
+        print(
+            f"Photo from {peer} device={device_id}: {len(image)} bytes, "
+            f"question={question!r}, saved={target}",
+            flush=True,
+        )
+        if not image.startswith(b"\xff\xd8"):
+            return "Das Bild kam nicht als JPEG an."
+
+        if target is None:
+            return "Ich konnte das Foto nicht speichern."
+
+        session = ACTIVE_SESSIONS.get((device_id or "").upper())
+        if session is None:
+            print(
+                f"Photo from {peer}: no active session for device {device_id!r}",
+                flush=True,
+            )
+            return "Das Foto ist da, aber keine Sprachverbindung aktiv."
+
+        # Auswertung getrennt starten; der Upload wird sofort bestätigt.
+        asyncio.create_task(session.run_photo_agent(target, question))
+        return "Einen Moment, ich schaue mir das Bild an."
+
     async def ota_handler(reader, writer):
         try:
             header = await reader.readuntil(b"\r\n\r\n")
+            lines = header.decode("latin1").split("\r\n")
+            method = (lines[0].split(" ")[0] if lines else "GET").upper()
+            path = lines[0].split(" ")[1] if len(lines[0].split(" ")) > 1 else "/"
             content_length = 0
-            for line in header.decode("latin1").split("\r\n"):
-                if line.lower().startswith("content-length:"):
+            chunked = False
+            boundary = ""
+            device_id = None
+            for line in lines:
+                low = line.lower()
+                if low.startswith("content-length:"):
                     content_length = int(line.split(":", 1)[1].strip())
-            if content_length:
+                elif low.startswith("transfer-encoding:") and "chunked" in low:
+                    chunked = True
+                elif low.startswith("content-type:") and "boundary=" in low:
+                    boundary = line.split("boundary=", 1)[1].strip().strip('"')
+                elif low.startswith("device-id:"):
+                    device_id = line.split(":", 1)[1].strip()
+
+            # --- Foto-Upload des Geraets -------------------------------
+            if path.startswith("/photo"):
+                body = b""
+                if chunked:
+                    body = await _read_chunked(reader)
+                elif content_length:
+                    body = await reader.readexactly(content_length)
+                answer = await handle_photo(
+                    body, boundary or "----ESP32_CAMERA_BOUNDARY",
+                    device_id, writer.get_extra_info("peername"),
+                )
+                payload = answer.encode("utf-8")
+                writer.write(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\n"
+                    + f"Content-Length: {len(payload)}\r\nConnection: close\r\n\r\n".encode()
+                    + payload
+                )
+                await writer.drain()
+                return
+
+            if chunked:
+                await _read_chunked(reader)
+            elif content_length:
                 await reader.readexactly(content_length)
             # Das Geraet kann uns aus einem anderen Subnetz erreichen
             # (z. B. 192.168.68.0/24 statt 192.168.178.0/24). Wir antworten

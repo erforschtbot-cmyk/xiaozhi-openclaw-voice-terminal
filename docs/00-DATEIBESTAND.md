@@ -55,6 +55,7 @@ vollständig; die Selbstprüfung am Ende bricht ab, wenn eine fehlt.
 | `local-voice.mjs` | Sprachhelfer für den lokalen Weg (`--stt-local`) | `server.py` |
 | `local_stt.mjs` | lokale Erkennung über Wyoming | `local-voice.mjs` |
 | `piper_speaker.py` | lokale Sprachausgabe (`--tts-local`) | `server.py` |
+| `photo-consult.mjs` | Bild-Consult zum Agenten (`chat.send` mit Bild) | `server.py` (Foto-Runde) |
 
 ### Weiche für Schaltbefehle
 
@@ -120,6 +121,7 @@ Diese Dateien gehören **nicht** ins Repository. Ihr Fehlen beim ersten Start is
 | `active-room.json` | `publish_active_room()` beim Sprechen | Raum des Geräts, `ts` in Sekunden, TTL 300 s | kein Raum bekannt → Befehl geht an die KI |
 | `last-utterance.json` | `openclaw-talk-realtime.mjs` pro finalem Transkript | gesprochener Satz, `ts` in **Millisekunden**, TTL 120 s | Weiche lehnt ab (`no-spoken-utterance`) |
 | `last-alexa-command.json` | `server.py` nach dem Senden | Dedupe-Schlüssel, `ts` in Sekunden, Fenster 8 s | kein Dedupe-Schutz |
+| `photo-<MAC>-<Zeit>.jpg` | `POST /photo` des Geräts | JPEG, Name = Gerät + Zeitstempel |
 | `voice-bindings/<uuid>.json` | `bindVoiceSession()` pro Verbindung | Session, Gerät, Raum, 24 h | Raum nicht pro Verbindung auflösbar |
 | `alexa-device-catalog.json` | `refresh-alexa-catalog.mjs` (täglich) | 102 erkannt / 23 zugelassen | Direktweg aus, KI bleibt verfügbar |
 

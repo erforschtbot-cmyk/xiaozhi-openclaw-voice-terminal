@@ -56,6 +56,8 @@ install -m 0644 "$repo_dir/gateway/room-router.mjs"            "$install_dir/roo
 install -m 0644 "$repo_dir/gateway/smart-home-router.mjs"      "$install_dir/smart-home-router.mjs"
 install -m 0644 "$repo_dir/gateway/scoped-smart-home-router.mjs" "$install_dir/scoped-smart-home-router.mjs"
 install -m 0644 "$repo_dir/gateway/refresh-alexa-catalog.mjs"  "$install_dir/refresh-alexa-catalog.mjs"
+# Foto-Weg: Bild-Consult zum Agenten (Kamera in der Firmware bereits enthalten).
+install -m 0755 "$repo_dir/gateway/photo-consult.mjs"          "$install_dir/photo-consult.mjs"
 install -m 0644 "$repo_dir/gateway/requirements.txt"           "$install_dir/requirements.txt"
 
 # --- Konfiguration, die vorhanden sein MUSS -------------------------------
@@ -109,7 +111,7 @@ missing=0
 for required in server.py room_command.py piper_speaker.py openclaw-talk-realtime.mjs \
                 local-voice.mjs local_stt.mjs voice-turn-context.mjs room-command.mjs \
                 room-router.mjs smart-home-router.mjs scoped-smart-home-router.mjs \
-                refresh-alexa-catalog.mjs requirements.txt room-map.json \
+                refresh-alexa-catalog.mjs photo-consult.mjs requirements.txt room-map.json \
                 disable-smart-home-fastpath voice-mode; do
   if [[ ! -e "$install_dir/$required" ]]; then
     echo "MISSING: $install_dir/$required" >&2

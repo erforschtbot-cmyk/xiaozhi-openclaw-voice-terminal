@@ -11,3 +11,6 @@ voice-bindings/
 
 node_modules/
 .venv-esptool/
+
+# Laufzeitdaten der Kamera
+photo-*.jpg
