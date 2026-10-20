@@ -700,6 +700,24 @@ class XiaozhiSession:
         async with self.send_lock:
             await self.websocket.send(json.dumps(payload, ensure_ascii=False))
 
+    async def publish_ring_ready(self, ready):
+        """Meldet dem Geraet, ob wirklich auf Sprache gewartet wird.
+
+        Der Geraetezustand `listening` allein ist keine Zusage: er wird schon
+        beim Kanalaufbau gesetzt, waehrend die Sprachverarbeitung noch startet.
+        Der Ring zeigt Gruen deshalb nur nach dieser Meldung.
+
+        Fehler werden bewusst geschluckt: eine nicht zustellbare
+        Ringmeldung darf keinen Turn abbrechen.
+        """
+        try:
+            await self.send_json({
+                "type": "ring",
+                "state": "ready" if ready else "waiting",
+            })
+        except Exception as exc:  # noqa: BLE001
+            print(f"{self.tag} ring readiness not delivered: {exc!r}", flush=True)
+
     async def start_realtime(self):
         if self.process and self.process.returncode is None:
             # XiaoZhi keeps sending microphone packets while the provider is
@@ -1189,6 +1207,12 @@ class XiaozhiSession:
         self.tts_text_buffer = ""
         self.local_pcm_bytes_sent = 0
         await self.start_realtime()
+        # Laeuft der Helper noch aus der vorigen Runde, kommt kein neues
+        # `ready`-Ereignis. Das Geraet hat seine Bereitschaft aber gerade beim
+        # Wechsel auf Listening zurueckgesetzt — ohne diese Meldung bliebe der
+        # Ring im Nachhoerfenster blau, obwohl Sprache angenommen wird.
+        if self.helper_ready.is_set():
+            await self.publish_ring_ready(True)
         self.schedule_followup_timeout()
 
     def schedule_stream_end(self, process):
@@ -1594,6 +1618,11 @@ class XiaozhiSession:
                                 f"{self.helper_ready_at - self.helper_started_at:.2f}s",
                                 flush=True,
                             )
+                        # Erst jetzt nimmt die Gegenstelle wirklich Sprache
+                        # an. Das Geraet darf den Ring erst jetzt gruen
+                        # zeigen; vorher leuchtete er mehrere Sekunden, ohne
+                        # dass Gesprochenes verarbeitet wurde.
+                        await self.publish_ring_ready(True)
                     print(
                         f"{self.tag} OpenClaw realtime event: "
                         + json.dumps(event, ensure_ascii=False),
@@ -1735,6 +1764,13 @@ class XiaozhiSession:
                     self.turn_peak = 0
                     self.awaiting_command = True
                     await self.start_realtime()
+                    # Laeuft der Helper aus einer frueheren Runde noch, kommt
+                    # kein neues `ready`-Ereignis. Das Geraet hat beim Wechsel
+                    # auf Listening aber gerade seine Bereitschaft
+                    # zurueckgesetzt — ohne diese Meldung bliebe der Ring blau,
+                    # obwohl Sprache sofort angenommen wird.
+                    if self.helper_ready.is_set() and self.process and self.process.returncode is None:
+                        await self.publish_ring_ready(True)
                 elif (
                     kind == "device"
                     and payload.get("event") == "state"
