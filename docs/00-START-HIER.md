@@ -70,6 +70,9 @@ OpenClaw-ESP-Node. „OTA-Gateway“ meint hier den Konfigurationsserver in der 
     Katalog erzeugen und Timer aus `systemd/jarvis-alexa-catalog.*` installieren;
     der Cloud-Installer liefert die Units jetzt mit, aktiviert sie jedoch erst
     nach eigener Konfiguration über `systemctl --user enable --now jarvis-alexa-catalog.timer`.
+11. Foto per Sprache prüfen (optional, Kamera nötig):
+    `docs/13-FOTO-PER-SPRACHE.md` — enthält auch den Beleg, dass die Firmware
+    **ohne** Kamera vollständig läuft.
 11. `docs/04-TESTPLAN.md` real durchführen: Boot, WLAN, Wakeword, lange Äußerung,
     hörbare Antwort, Rückkehr zum Zuhören, Transkript, Werkzeug, zwei Räume.
     Syntax, Prüfsummen oder offene Ports ersetzen diesen Test nicht.

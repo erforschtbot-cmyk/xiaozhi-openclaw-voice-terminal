@@ -157,6 +157,13 @@ auf dem OpenClaw-Host.
 11. [`docs/13-FOTO-PER-SPRACHE.md`](docs/13-FOTO-PER-SPRACHE.md) — Foto per Sprache
     (Kamera, Upload-Endpunkt, Bild-Consult; Firmware kann es bereits)
 
+> **Kamera ist optional.** Die Audio-Board-Firmware läuft auch **ohne**
+> angeschlossenen Sensor: Es gibt keinen harten Abbruch im Kamera-Pfad, das Gerät
+> bleibt ein vollwertiger Sprachassistent. Nur `self.camera.take_photo` schlägt
+> dann fehl und Jarvis sagt ehrlich, dass das Foto nicht geklappt hat.
+> Details und Code-Belege: [`docs/13-FOTO-PER-SPRACHE.md`](docs/13-FOTO-PER-SPRACHE.md),
+> Abschnitt „Läuft die Firmware auch ohne Kamera?".
+
 > **Der Installationsort ist nicht frei wählbar:**
 > `/home/openclaw/.local/share/jarvis-realtime-bridge`. Der Gateway-Patch importiert
 > `voice-turn-context.mjs` und `scoped-smart-home-router.mjs` per absolutem Pfad.
