@@ -85,7 +85,20 @@ test('ACTUAL gateway entry: direct skips agent, complex calls agent with scoped 
   const sandbox = {
     setTimeout, jarvisReadBinding: () => ({ room: "Schlafzimmer", deviceId: "device-a", voiceSessionId: "voice-1", sessionKey }), jarvisTurnStorage: voiceTurnStorage, route: h.route, canonicalKey: sessionKey, sessionKey, agentId: 'voice',
     parseRealtimeVoiceAgentConsultArgs: x => x, isAgentEventLifecycleGenerationCurrent: () => true,
-    params: { getJarvisTurn: () => current, getVoiceSessionId: () => current?.voiceSessionId ?? 'voice-1', registerRun: true, context: { logGateway: { info() {}, warn() {} } } },
+    params: {
+      getJarvisTurn: () => current,
+      waitForJarvisTurn: async (signal, timeoutMs) => {
+        if (current) return current;
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(resolve, Math.min(timeoutMs, 25));
+          signal?.addEventListener('abort', () => { clearTimeout(timer); reject(signal.reason); }, { once: true });
+        });
+        return current;
+      },
+      getVoiceSessionId: () => current?.voiceSessionId ?? 'voice-1',
+      registerRun: true,
+      context: { logGateway: { info() {}, warn() {} } }
+    },
     agent: async () => { agentCalls++; await new Promise(r => setTimeout(r, 1)); return { text: voiceTurnStorage.getStore().room }; }
   };
   vm.createContext(sandbox);
@@ -95,20 +108,22 @@ test('ACTUAL gateway entry: direct skips agent, complex calls agent with scoped 
   current = turn('Monitor aus und Licht an', 'Arbeitszimmer', 'complex');
   const result = await sandbox.run({ question: current.utterance }, undefined, undefined, undefined, undefined, 'native-delegation');
   assert.equal(result.text, 'Arbeitszimmer'); assert.equal(agentCalls, 1); assert.equal(h.sent.length, 1);
-  // A missing turn must never delay the consult. The agent starts at once,
-  // keeps the device room from the binding, and the direct route stays closed.
+  // Provider delegation may precede the final STT event. A turn that arrives
+  // inside the bounded wait must still take the direct route.
   current = undefined;
+  setTimeout(() => { current = turn('Licht an', 'Schlafzimmer', 'late'); }, 10);
   const startedAt = Date.now();
-  const fallback = await sandbox.run({ question: 'Licht an' }, undefined, undefined, undefined, undefined, 'native-delegation');
-  assert.equal(fallback.text, 'Schlafzimmer', 'agent must still get the room');
-  assert.equal(agentCalls, 2);
-  assert.equal(h.sent.length, 1, 'no direct send without a turn');
-  assert.ok(Date.now() - startedAt < 100, 'consult must not wait for late STT');
-  // Late STT arriving afterwards cannot retroactively switch already-sent work.
-  current = turn('Licht an', 'Schlafzimmer', 'late');
   await sandbox.run({ question: 'Licht an' }, undefined, undefined, undefined, undefined, 'native-delegation');
   assert.equal(h.sent.at(-1), 'Schlafzimmer Licht an');
+  assert.equal(agentCalls, 1);
+  assert.ok(Date.now() - startedAt >= 8, 'direct route must wait for finalized STT');
+  // If no final transcript arrives before the bound, the normal agent path
+  // remains available with the room binding and nothing is sent directly.
+  current = undefined;
+  const fallback = await sandbox.run({ question: 'Licht aus' }, undefined, undefined, undefined, undefined, 'native-delegation');
+  assert.equal(fallback.text, 'Schlafzimmer', 'agent must still get the room');
   assert.equal(agentCalls, 2);
+  assert.equal(h.sent.length, 2, 'no direct send without a finalized turn');
   await assert.rejects(sandbox.run({ question: 'Licht an' }, AbortSignal.abort()));
   assert.equal(agentCalls, 2);
 });
