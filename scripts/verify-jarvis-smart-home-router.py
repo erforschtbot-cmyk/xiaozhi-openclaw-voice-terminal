@@ -55,6 +55,19 @@ for path in handlers:
     assert "waitForJarvisTurn?.(args[1], 1500)" in text, \
         f"Begrenztes Warten auf finales Transkript fehlt: {path}"
     assert "jarvisTurnWaiters" in text, f"Turn-Wakeup fehlt: {path}"
+    # Die Weiche braucht ihre eigenen Deklarationen im Relay-Scope. Fehlten sie
+    # (OpenClaw 2026.10.5, erster Port), warf der erste finale Satz eine
+    # ReferenceError und der gesamte Gateway-Prozess beendete sich.
+    assert "let jarvisObservedTurn;" in text, \
+        f"Deklaration jarvisObservedTurn fehlt (Absturzgefahr): {path}"
+    assert "const jarvisTurnWaiters = new Set();" in text, \
+        f"Deklaration jarvisTurnWaiters fehlt (Absturzgefahr): {path}"
+    assert "const waitForJarvisTurn = (signal, timeoutMs) => {" in text, \
+        f"Deklaration waitForJarvisTurn fehlt (Absturzgefahr): {path}"
+    assert "getJarvisTurn: () => jarvisObservedTurn," in text, \
+        f"Getter getJarvisTurn fehlt (Absturzgefahr): {path}"
+    assert "waitForJarvisTurn," in text, \
+        f"Uebergabe waitForJarvisTurn fehlt (Absturzgefahr): {path}"
     checked.append(path)
 
 result = subprocess.run(["node", "--test", *map(str, tests)],
