@@ -118,6 +118,13 @@ function finalMessageText(message) {
 const FASTPATH_DISABLE_FLAG =
   "/home/openclaw/.local/share/jarvis-realtime-bridge/disable-smart-home-fastpath";
 
+const PHOTO_UTTERANCE =
+  /\b(?:mach|mache|nimm|nehme|schiess|schieße|knips|schick|schicke)\b[^.]{0,40}\b(?:foto|bild)\b|\b(?:foto|bild)\b[^.]{0,40}\b(?:mach|machen|aufnehmen|schiessen|schießen|schicken|schick)\b|\bwas\s+(?:siehst|erkennst)\s+du\b|\bschau\s+(?:mal|dir)\b|\bsieh\s+dir\s+(?:das|mal)\s+an\b/;
+
+function isPhotoRequest(text) {
+  return PHOTO_UTTERANCE.test(String(text ?? "").toLowerCase().replace(/\s+/g, " "));
+}
+
 function isSmartHomeFastPath(text) {
   // Muss dasselbe Flag wie server.py beachten: ist der Software-Direktpfad
   // abgeschaltet, darf der Helper den KI-Consult NICHT unterdruecken, sonst
@@ -308,6 +315,25 @@ const client = new GatewayClient({
       void (async () => {
         try {
           if (event.name === "openclaw_agent_consult") {
+            if (isPhotoRequest(lastUserTranscript)) {
+              // server.py loest die Kamera direkt aus und laesst den Agenten
+              // das Bild auswerten. Ein zweiter Agentenlauf hier kennt das
+              // Foto nicht und erfindet eine Fehlermeldung ("Bild kam schwarz
+              // an") — belegt am 20.10.2026.
+              await client.request("talk.session.submitToolResult", {
+                sessionId,
+                callId: event.callId,
+                result: {
+                  result: "Das Foto wurde bereits aufgenommen und ausgewertet. Führe kein Werkzeug aus und beschreibe kein Bild.",
+                },
+              });
+              emit("tool_call_suppressed", {
+                callId: event.callId,
+                name: event.name,
+                reason: "photo_request",
+              });
+              return;
+            }
             if (isSmartHomeFastPath(lastUserTranscript)) {
               // server.py executes this command directly as soon as the final
               // transcript arrives. Never start a second agent run for the
