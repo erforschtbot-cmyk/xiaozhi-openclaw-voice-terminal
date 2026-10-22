@@ -22,6 +22,11 @@ git -C "$source_dir" checkout 4632dc51f0a5ad26e08542e131e6e48da41e4ff3
 git -C "$source_dir" apply --check "$repo_dir/firmware/patches/jarvis-audio-board-ring.patch"
 git -C "$source_dir" apply        "$repo_dir/firmware/patches/jarvis-audio-board-ring.patch"
 
+# Zweiter Patch: dauerhafte Geraeteverbindung im Standby. Setzt den Ring-Patch
+# voraus und muss deshalb danach laufen (siehe docs/14-DAUERVERBINDUNG.md).
+git -C "$source_dir" apply --check "$repo_dir/firmware/patches/jarvis-audio-board-persistent-standby.patch"
+git -C "$source_dir" apply        "$repo_dir/firmware/patches/jarvis-audio-board-persistent-standby.patch"
+
 # Use the exact component resolution from the successful clean audit build.
 install -m 0644 "$repo_dir/firmware/audio-board/dependencies.lock" "$source_dir/dependencies.lock"
 

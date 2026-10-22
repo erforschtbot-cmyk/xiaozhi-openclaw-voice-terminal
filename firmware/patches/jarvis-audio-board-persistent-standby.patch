@@ -1,0 +1,173 @@
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -269,6 +269,9 @@
+ 
+         if (bits & MAIN_EVENT_VAD_CHANGE) {
+             if (GetDeviceState() == kDeviceStateListening) {
++                if (protocol_ && protocol_->IsAudioChannelOpened()) {
++                    protocol_->SendSpeechActivity(audio_service_.IsVoiceDetected());
++                }
+                 auto led = Board::GetInstance().GetLed();
+                 led->OnStateChanged();
+             }
+@@ -285,6 +288,7 @@
+ 
+         if (bits & MAIN_EVENT_CLOCK_TICK) {
+             clock_ticks_++;
++            TickPersistentReconnect();
+             auto display = Board::GetInstance().GetDisplay();
+             display->UpdateStatusBar();
+ 
+@@ -560,6 +564,15 @@
+ 
+     protocol_->OnNetworkError([this](const std::string& message) {
+         last_error_message_ = message;
++        // A failed background reconnect while idling must stay silent. It is
++        // the normal state when the bridge is off, and an audible alert every
++        // few seconds would make the device unusable. Real failures while
++        // connecting (wake word) still alert as before.
++        if (GetDeviceState() == kDeviceStateIdle && protocol_ &&
++            protocol_->KeepConnectionInStandby()) {
++            ESP_LOGW(TAG, "Background reconnect failed: %s", message.c_str());
++            return;
++        }
+         xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
+     });
+ 
+@@ -648,6 +661,13 @@
+                     }
+                 });
+             }
++        } else if (strcmp(type->valuestring, "standby") == 0) {
++            Schedule([this]() {
++                tts_stream_end_pending_ = false;
++                audio_service_.ResetDecoder();
++                SetDeviceState(kDeviceStateIdle);
++                ESP_LOGI(TAG, "Persistent standby: transport retained, wake word local");
++            });
+         } else if (strcmp(type->valuestring, "tts") == 0) {
+             auto state = cJSON_GetObjectItem(root, "state");
+             if (!cJSON_IsString(state)) {
+@@ -941,6 +961,46 @@
+     }
+ }
+ 
++void Application::TickPersistentReconnect() {
++    // Only persistent-standby transports reconnect on their own. The MQTT path
++    // and older firmware behaviour are untouched.
++    if (!protocol_ || !protocol_->KeepConnectionInStandby()) return;
++    if (GetDeviceState() != kDeviceStateIdle ||
++        protocol_->IsAudioChannelOpened()) {
++        reconnect_attempts_ = 0;
++        reconnect_backoff_ticks_ = 0;
++        return;
++    }
++    if (background_reconnect_) return;
++    // 2,4,8,16,30,30,... seconds between attempts. Retrying forever is fine:
++    // the attempt is cheap and silent, and the device must recover on its own
++    // once the bridge is reachable again.
++    int wait_seconds = 2 << (reconnect_attempts_ > 4 ? 4 : reconnect_attempts_);
++    if (wait_seconds > 30) wait_seconds = 30;
++    if (++reconnect_backoff_ticks_ < wait_seconds) return;
++    reconnect_backoff_ticks_ = 0;
++    if (reconnect_attempts_ < 4) reconnect_attempts_++;
++    background_reconnect_ = true;
++    // Connect() blocks for up to ~10 s. It must not run in the main loop,
++    // otherwise a wake word during a dead bridge would be delayed.
++    const BaseType_t created = xTaskCreate(
++        [](void* arg) {
++            auto* app = static_cast<Application*>(arg);
++            const bool ok = app->protocol_ && app->protocol_->OpenAudioChannel();
++            if (ok) {
++                app->reconnect_attempts_ = 0;
++                ESP_LOGI(TAG, "Persistent transport re-established");
++            }
++            app->background_reconnect_ = false;
++            vTaskDelete(nullptr);
++        },
++        "persistent_reconnect", 8192, this, 2, nullptr);
++    if (created != pdPASS) {
++        background_reconnect_ = false;
++        ESP_LOGW(TAG, "Could not start reconnect task");
++    }
++}
++
+ void Application::HandleWakeWordDetectedEvent() {
+     if (!protocol_) {
+         return;
+--- a/main/application.h
++++ b/main/application.h
+@@ -157,6 +157,13 @@
+     bool tts_stream_end_pending_ = false;
+     int clock_ticks_ = 0;
+     TaskHandle_t activation_task_handle_ = nullptr;
++    // Silent background re-establish of the retained device transport.
++    // A failed attempt must never raise the audible error alert, and the
++    // blocking Connect() must not run inside the main event loop.
++    bool background_reconnect_ = false;
++    int reconnect_attempts_ = 0;
++    int reconnect_backoff_ticks_ = 0;
++    TaskHandle_t reconnect_task_handle_ = nullptr;
+ 
+ 
+     // Event handlers
+@@ -168,6 +175,7 @@
+     void HandleNetworkDisconnectedEvent();
+     void HandleActivationDoneEvent();
+     void HandleWakeWordDetectedEvent();
++    void TickPersistentReconnect();
+     void ContinueOpenAudioChannel(ListeningMode mode);
+     void BeginWakeWordInvoke(const std::string& wake_word);
+     void ContinueWakeWordInvoke(const std::string& wake_word);
+--- a/main/protocols/protocol.cc
++++ b/main/protocols/protocol.cc
+@@ -118,6 +118,11 @@
+     SendText(message);
+ }
+ 
++void Protocol::SendSpeechActivity(bool speaking) {
++    SendText(std::string("{\"type\":\"device\",\"event\":\"speech_activity\",\"active\":") +
++             (speaking ? "true}" : "false}"));
++}
++
+ bool Protocol::IsTimeout() const {
+     const int kTimeoutSeconds = 120;
+     auto now = std::chrono::steady_clock::now();
+--- a/main/protocols/protocol.h
++++ b/main/protocols/protocol.h
+@@ -57,6 +57,7 @@
+     void OnDisconnected(std::function<void()> callback);
+ 
+     virtual bool Start() = 0;
++    virtual bool KeepConnectionInStandby() const { return false; }
+     virtual bool OpenAudioChannel() = 0;
+     virtual void CloseAudioChannel(bool send_goodbye = true) = 0;
+     virtual bool IsAudioChannelOpened() const = 0;
+@@ -72,6 +73,7 @@
+     virtual void SendPlaybackDrained();
+     // Meldet einen Zustandswechsel (z. B. listening/speaking/idle).
+     virtual void SendDeviceState(const std::string& state);
++    virtual void SendSpeechActivity(bool speaking);
+ 
+ protected:
+     std::function<void(const cJSON* root)> on_incoming_json_;
+--- a/main/protocols/websocket_protocol.cc
++++ b/main/protocols/websocket_protocol.cc
+@@ -206,6 +206,7 @@
+     cJSON_AddBoolToObject(features, "aec", true);
+ #endif
+     cJSON_AddBoolToObject(features, "mcp", true);
++    cJSON_AddBoolToObject(features, "persistent_standby", true);
+     cJSON_AddItemToObject(root, "features", features);
+     AddTextFontCapabilities(root);
+     cJSON_AddStringToObject(root, "transport", "websocket");
+--- a/main/protocols/websocket_protocol.h
++++ b/main/protocols/websocket_protocol.h
+@@ -16,6 +16,7 @@
+     ~WebsocketProtocol();
+ 
+     bool Start() override;
++    bool KeepConnectionInStandby() const override { return true; }
+     bool SendAudio(std::unique_ptr<AudioStreamPacket> packet) override;
+     bool OpenAudioChannel() override;
+     void CloseAudioChannel(bool send_goodbye = true) override;

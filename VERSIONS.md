@@ -47,15 +47,16 @@ Firmware. Vollständige Anleitung: `docs/07-AUDIO-BOARD.md`.
 | Audio | ES8311 (DAC), ES7210 (Dual-Mic) |
 | Anzeige | **kein Display** — 7 RGB-Ring-LEDs (WS2812, GPIO 38) |
 | Boardziel | `waveshare/esp32-s3-audio-board` |
-| Patch | `firmware/patches/jarvis-audio-board-ring.patch` |
+| Patch | `firmware/patches/jarvis-audio-board-ring.patch`, danach `firmware/patches/jarvis-audio-board-persistent-standby.patch` (Reihenfolge zwingend, siehe [docs/14-DAUERVERBINDUNG.md](docs/14-DAUERVERBINDUNG.md)) |
 | Sprache / Wakeword | `de-DE` / `wn9_jarvis_tts` (wie 4B) |
 | Geräte-MAC | `90:70:69:eb:1e:b4` |
-| Laufende Firmware | `xiaozhi 2.5.0`, gebaut `Oct 20 2026 15:38:24` (Tasten, Ring-Anzeige, Kennlinie, playback_drained, **Weiß-Blitz bei Kameraaufnahme**) |
+| Laufende Firmware | `xiaozhi 2.5.0`, gebaut `Oct 22 2026 13:02` (Tasten, Ring-Anzeige, Kennlinie, playback_drained, Weiß-Blitz bei Kameraaufnahme, **dauerhafte Geräteverbindung im Standby**) |
 | Geflasht auf | Gerät `90:70:69:eb:1c:0c` (Wohnzimmer), App-Partition `0x20000`, NVS erhalten |
-| App-SHA256 (Ist-Stand) | `acf864c5001638ee18eb7c7439ab555b7d09f4a16a93c2baa6842246e7a6b4bc` |
+| App-SHA256 (Ist-Stand) | `a220b30a25519aef722921f62b726e208fe751a876a4d5327a44fad25acb8200` (2.834.448 B, Flash 2026-10-22 13:09, Hash verifiziert) |
+| Standby-Beleg | 2026-10-22 13:14:57: Gerät verbunden, Verbindung über 60 s **durchgehend offen**, dabei **keine** OpenAI-Sitzung. Vollständiger Sprach-Turn mit diesem Stand noch nicht bestätigt. |
 | Veröffentlichter Anker | `firmware/prebuilt/audio-board/xiaozhi.bin` (App-Partition, 2.833.056 B) |
 | Anker-SHA256 | `acf864c5001638ee18eb7c7439ab555b7d09f4a16a93c2baa6842246e7a6b4bc` |
-| Anker-Status | **Am Gerät bestätigt (2026-10-20, 18:08).** Foto-Lauf protokolliert: Auslösung 18:08:06, Upload fertig 18:08:07, korrekte Bildbeschreibung, gesprochen. Der Blitz war rund eine Sekunde an. |
+| Anker-Status | **Am Gerät bestätigt (2026-10-20, 18:08).** Foto-Lauf protokolliert: Auslösung 18:08:06, Upload fertig 18:08:07, korrekte Bildbeschreibung, gesprochen. Der Blitz war rund eine Sekunde an. Der Anker ist der **Rückfall** für den Persistent-Standby-Stand vom 22.10.; dieser ist selbst noch nicht als Sprach-Turn abgenommen. |
 | Vorheriger Anker | `firmware/prebuilt/audio-board/previous-vor-kamera-blitz/xiaozhi.bin` (`eb8671648ec85ebce…`, Stand ohne Blitz) |
 
 Der Anker ist die **App-Partition** (2.833.056 B), nicht das Vollimage. Er
