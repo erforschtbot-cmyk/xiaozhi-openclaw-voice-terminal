@@ -80,19 +80,38 @@ class PersistentStandby(unittest.IsolatedAsyncioTestCase):
         s.prewarm_realtime.assert_not_awaited()
         self.assertEqual(s.start_realtime.await_count, 3)
 
-    async def test_speech_onset_cancels_idle_deadline(self):
+    async def test_speech_onset_refreshes_idle_deadline(self):
+        # Frueher wurde hier die Frist geloescht und followup_open=False
+        # gesetzt. Danach existierte keine Frist mehr, und der Ring blieb gruen,
+        # bis der naechste Satz kam (belegt 22.10.2026: 105 s). Korrekt ist:
+        # Sprachaktivitaet haelt das Fenster offen, indem sie die Frist neu
+        # startet; das Fenster bleibt dabei offen.
         s=session()
         s.close=AsyncMock()
-        s.followup_task=asyncio.create_task(asyncio.sleep(60))
-        deadline=s.followup_task
+        s.schedule_followup_timeout=Mock()
+        s.cancel_followup_timeout=Mock()
         async def messages():
             yield json.dumps({'type':'device','event':'speech_activity','active':True})
         class Socket:
             def __aiter__(self): return messages()
         s.websocket=Socket()
         await s.run()
-        await asyncio.gather(deadline, return_exceptions=True)
-        self.assertTrue(deadline.cancelled())
-        self.assertFalse(s.followup_open)
+        s.schedule_followup_timeout.assert_called_once()
+        s.cancel_followup_timeout.assert_not_called()
+        self.assertTrue(s.followup_open)
+
+    async def test_speech_activity_outside_window_is_ignored(self):
+        # Ohne offenes Nachhoerfenster darf die Meldung nichts anfassen.
+        s=session()
+        s.close=AsyncMock()
+        s.followup_open=False
+        s.schedule_followup_timeout=Mock()
+        async def messages():
+            yield json.dumps({'type':'device','event':'speech_activity','active':True})
+        class Socket:
+            def __aiter__(self): return messages()
+        s.websocket=Socket()
+        await s.run()
+        s.schedule_followup_timeout.assert_not_called()
 
 if __name__ == '__main__': unittest.main()

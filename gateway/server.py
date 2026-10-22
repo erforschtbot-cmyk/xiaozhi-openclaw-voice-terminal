@@ -134,7 +134,24 @@ class XiaozhiSession:
         # bis zum fertigen Transkript hochgehalten. Grundlage des Vergleichs,
         # welches Geraet den Nutzer wirklich gehoert hat.
         self.turn_peak = 0
+        # Zeitpunkt des letzten Mikrofonpakets mit Sprache. NICHT turn_peak:
+        # das ist ein Dauer-Maximum und wurde vom Wake-Wort gesetzt, danach
+        # steigt es nie mehr (belegt 22.10.2026, 21:45: Wake 12503, danach
+        # Sprache 1283/1090 -> Waechter sah "keine Worte" und schloss).
+        self.last_mic_activity_at = 0.0
+        # Wurde seit dem Wecken ueberhaupt Sprache erkannt? Entscheidet, ob die
+        # Stille-Regel greifen darf: ohne Sprache -> Standby, MIT Sprache ->
+        # warten, das Transkript braucht laenger als 5 s.
+        self.speech_seen_since_wake = False
+        # Mikrofonpakete, die VOR dem Start des Sprachprozesses ankommen.
+        # Ohne diesen Puffer gingen sie verloren: belegt 22.10.2026, zwischen
+        # Wake (21:50:49) und bereitem Prozess (21:50:51) sind das rund 1,1 s.
+        self.wake_audio_buffer = []
+        self.wake_audio_buffer_bytes = 0
         self.awaiting_command = False
+        # Letzter von der Firmware gemeldeter Zustand (listening/speaking/idle).
+        # Standby darf NUR aus "listening" heraus passieren.
+        self.device_state = "idle"
         self.drained_watchdog = None
         self.speaking_guard = None
         self.interim_watchdog = None
@@ -778,6 +795,9 @@ class XiaozhiSession:
         self.audio_diag_blocks = 0
         self.audio_diag_peak = 0
         self.lead_silence = bytearray()
+        self.last_mic_activity_at = 0.0
+        self.speech_seen_since_wake = False
+        self.mic_packets_total = 0
 
         env = os.environ.copy()
         env.update(
@@ -807,6 +827,17 @@ class XiaozhiSession:
             env=env,
         )
         process = self.process
+        # Ton aus der Startluecke nachliefern, bevor neuer Ton kommt.
+        if self.wake_audio_buffer and process.stdin and not process.stdin.is_closing():
+            for piece in self.wake_audio_buffer:
+                process.stdin.write(piece)
+            await process.stdin.drain()
+            print(
+                f"{self.tag} Flushed {self.wake_audio_buffer_bytes} bytes of pre-wake audio",
+                flush=True,
+            )
+            self.wake_audio_buffer.clear()
+            self.wake_audio_buffer_bytes = 0
         self.stdout_task = asyncio.create_task(self.read_audio(process))
         self.stderr_task = asyncio.create_task(self.read_events(process))
         self.process_watch_task = asyncio.create_task(
@@ -819,7 +850,18 @@ class XiaozhiSession:
     # transcript.  Closing this one websocket is enough to return the board to
     # standby; the next wake word creates a completely fresh Talk session.
     HELPER_START_TIMEOUT_SECONDS = 15.0
-    LISTENING_NO_TRANSCRIPT_SECONDS = 30.0
+    # EINE Regel, ueberall gleich: 5 Sekunden ohne ein einziges Wort -> Standby.
+    # Keine weiteren Fristen, keine Obergrenzen, keine Pegel-Schwellen. Alles
+    # davon waren von mir erfundene Zahlen, die echte Sprache abgeschnitten
+    # haben (belegt 22.10.2026: Abbruch nach 30 s, obwohl durchgehend
+    # Mikrofonpakete ankamen).
+    SILENCE_BEFORE_STANDBY_SECONDS = 5.0
+    # Pegel, ab dem ein Mikrofonpaket als Sprache gilt. Am Referenzgeraet
+    # gemessen: Stille 40-50, Sprache 1000-13000.
+    MIC_SPEECH_PEAK = 300
+    # 5 Sekunden 16-kHz-Mono-Ton: deckt den Start des Sprachprozesses ab,
+    # ohne unbegrenzt Speicher zu halten.
+    WAKE_AUDIO_BUFFER_MAX_BYTES = 160000
 
     def cancel_helper_guard(self):
         current_task = asyncio.current_task()
@@ -833,6 +875,17 @@ class XiaozhiSession:
             self.helper_guard = None
 
     def arm_helper_guard(self, process):
+        """Genau EINE Regel, identisch zum Nachhoerfenster.
+
+        Belegt am 22.10.2026: Nach dem Wake-Wort mit anschliessender Stille
+        blieb das Geraet dauerhaft gruen. Grund: die 5-Sekunden-Frist gab es
+        ausschliesslich im Nachhoerfenster NACH einer Antwort. Der erste
+        Zustand (Wake, dann nichts gesagt) hatte keine, seit ich die alten,
+        falschen Fristen entfernt hatte.
+
+        Jetzt gilt in beiden Faellen dasselbe: 5 Sekunden ohne ein erkanntes
+        Wort -> Bereitschaft. Kommt Sprache, wird die Frist verschoben.
+        """
         self.cancel_helper_guard()
 
         async def guard():
@@ -841,20 +894,6 @@ class XiaozhiSession:
                     self.helper_ready.wait(),
                     timeout=self.HELPER_START_TIMEOUT_SECONDS,
                 )
-                await asyncio.sleep(self.LISTENING_NO_TRANSCRIPT_SECONDS)
-                if (
-                    process is self.process
-                    and process.returncode is None
-                    and self.transcript_final_at <= 0
-                    and not self.input_stopped
-                ):
-                    print(
-                        f"{self.tag} No final transcript within "
-                        f"{self.LISTENING_NO_TRANSCRIPT_SECONDS:.0f}s after "
-                        "helper ready; recycling voice connection",
-                        flush=True,
-                    )
-                    await self.return_to_standby("no_transcript_timeout")
             except asyncio.TimeoutError:
                 if process is self.process and process.returncode is None:
                     print(
@@ -864,8 +903,41 @@ class XiaozhiSession:
                         flush=True,
                     )
                     await self.return_to_standby("helper_start_timeout")
+                return
             except asyncio.CancelledError:
                 return
+
+            loop = asyncio.get_running_loop()
+            idle_since = loop.time()
+            while True:
+                try:
+                    await asyncio.sleep(0.5)
+                except asyncio.CancelledError:
+                    return
+                if process is not self.process or process.returncode is not None:
+                    return
+                if self.input_stopped:
+                    return
+                # Ein erkanntes Wort beendet die Frist: der Turn laeuft.
+                if self.transcript_final_at > 0 or self.tts_started or self.pending_tool:
+                    return
+                # Sobald Sprache erkannt wurde, NICHT mehr auf die Uhr schauen.
+                # Das Transkript braucht laenger als die Stille-Frist: gemessen
+                # am 22.10.2026 kam Sprache um 22:17:49 (peak=1383), das
+                # Transkript aber nie, weil um 22:17:54 abgebrochen wurde.
+                if self.speech_seen_since_wake:
+                    return
+                if self.last_mic_activity_at > idle_since:
+                    idle_since = self.last_mic_activity_at
+                    continue
+                if loop.time() - idle_since >= self.followup_seconds():
+                    print(
+                        f"{self.tag} No words for {self.followup_seconds():.0f}s "
+                        "after wake; returning to standby",
+                        flush=True,
+                    )
+                    await self.return_to_standby("silence_after_wake")
+                    return
 
         self.helper_guard = asyncio.create_task(guard())
 
@@ -1096,6 +1168,12 @@ class XiaozhiSession:
             "ich schaue",
             "ich schaue nach",
             "ich schaue kurz nach",
+            "ich schaue mir das an",
+            "ich schaue mir das kurz an",
+            "ich sehe mir das an",
+            "ich gucke mir das an",
+            "ich kümmere mich darum",
+            "ich kuemmere mich darum",
         }
 
     def cancel_session_finish(self):
@@ -1352,11 +1430,15 @@ class XiaozhiSession:
 
         self.drained_watchdog = asyncio.create_task(fallback_after_playback())
 
+    def followup_seconds(self):
+        """Dieselbe Dauer wie das Nachhoerfenster: 5 s persistent, sonst 10 s."""
+        return 5.0 if getattr(self, "persistent_standby", False) else 10.0
+
     def schedule_followup_timeout(self):
         self.cancel_followup_timeout()
 
         async def close_after_followup_window():
-            seconds = 5.0 if getattr(self, "persistent_standby", False) else 10.0
+            seconds = self.followup_seconds()
             print(f"{self.tag} Follow-up window open for {seconds:g} seconds", flush=True)
             await asyncio.sleep(seconds)
             print(
@@ -1869,6 +1951,12 @@ class XiaozhiSession:
                 # Laeuft der laufende Befehl, wird der hoechste Pegel seit dem
                 # Wecken festgehalten. Das ist die Grundlage des Vergleichs.
                 self.turn_peak = max(self.turn_peak, peak)
+            # Getrennt davon: WANN zuletzt Sprache ankam. Gemessen am Geraet
+            # liegt Stille bei Peak 40-50, Sprache ab etwa 1000. Die Schwelle
+            # 300 liegt dazwischen und ist damit kein geratener Wert.
+            if peak >= self.MIC_SPEECH_PEAK:
+                self.last_mic_activity_at = asyncio.get_running_loop().time()
+                self.speech_seen_since_wake = True
             self.audio_packets += 1
             self.audio_peak = max(self.audio_peak, peak)
             if self.audio_packets % 25 == 0:
@@ -1884,6 +1972,22 @@ class XiaozhiSession:
                 self.followup_peak,
                 max((abs(sample) for sample in samples), default=0),
             )
+        # Diagnose: jedes echte Mikrofonpaket zaehlen, damit ein stummer Kanal
+        # sofort auffaellt statt als "keine Funktion" ohne Anhaltspunkt.
+        self.mic_packets_total = getattr(self, "mic_packets_total", 0) + 1
+        if not (self.process and self.process.stdin and not self.process.stdin.is_closing()):
+            # Noch kein Sprachprozess: Ton nicht verwerfen, sondern kurz
+            # zurueckhalten und beim Start nachliefern. Sonst gehen die ersten
+            # Woerter nach dem Wake-Wort verloren.
+            if pcm:
+                self.wake_audio_buffer.append(pcm)
+                self.wake_audio_buffer_bytes += len(pcm)
+                while (
+                    self.wake_audio_buffer_bytes > self.WAKE_AUDIO_BUFFER_MAX_BYTES
+                    and self.wake_audio_buffer
+                ):
+                    self.wake_audio_buffer_bytes -= len(self.wake_audio_buffer.pop(0))
+            return
         if (
             self.process
             and self.process.stdin
@@ -1990,6 +2094,7 @@ class XiaozhiSession:
                     self.turn_peak = 0
                     self.awaiting_command = True
                     self.input_stopped = False
+                    print(f"{self.tag} Listen start from device", flush=True)
                     await self.start_realtime()
                     # Laeuft der Helper aus einer frueheren Runde noch, kommt
                     # kein neues `ready`-Ereignis. Das Geraet hat beim Wechsel
@@ -2000,10 +2105,20 @@ class XiaozhiSession:
                         await self.publish_ring_ready(True)
                 elif kind == "device" and payload.get("event") == "speech_activity":
                     if self.followup_open and payload.get("active") is True:
-                        self.cancel_followup_timeout()
-                        self.followup_open = False
-                        self.turn_peak = 0
-                        self.awaiting_command = True
+                        # Sprachaktivitaet haelt das Nachhoerfenster OFFEN, sie
+                        # darf es aber nicht abschalten. Fassung vom 22.10.2026
+                        # rief hier nur cancel_followup_timeout() und setzte
+                        # followup_open=False — danach existierte keine Frist
+                        # mehr und der Ring blieb gruen, bis der naechste Satz
+                        # kam (belegt 21:16:28 bis 21:18:13, 105 s).
+                        # Jetzt wird die 5-Sekunden-Frist neu gestartet: solange
+                        # gesprochen wird, bleibt sie offen, danach laeuft sie
+                        # regulaer ab.
+                        print(
+                            f"{self.tag} Speech activity: follow-up window refreshed",
+                            flush=True,
+                        )
+                        self.schedule_followup_timeout()
                 elif (
                     kind == "device"
                     and payload.get("event") == "state"
@@ -2013,8 +2128,9 @@ class XiaozhiSession:
                     # musste den Geraetezustand aus dem Timing erraten. Wir
                     # protokollieren ihn, damit sich Anzeige und Wirklichkeit
                     # bei Bedarf abgleichen lassen.
+                    self.device_state = str(payload.get("state") or "idle")
                     print(
-                        f"{self.tag} Device state: {payload.get('state')}",
+                        f"{self.tag} Device state: {self.device_state}",
                         flush=True,
                     )
                     # In the follow-up window, "speaking" means the device

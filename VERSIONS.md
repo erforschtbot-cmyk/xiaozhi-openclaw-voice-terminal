@@ -6,6 +6,7 @@ Diese Werte sind der **Ist-Stand vom 2026-10-20** auf dem Referenzhost.
 |---|---|
 | OpenClaw | `2026.10.5` (`1b58cb9`) |
 | Gateway-Patchsatz | `patches/openclaw-2026.10.5/` (versionsgebunden, siehe unten) |
+| Sprachhelfer (Gerät) | `gateway/openclaw-thin-client.mjs`, Modus `thin-webrtc` (`gateway-control-v1`, Medien direkt zu OpenAI). Alter Weg `gateway-relay` bleibt als Rückfall. Siehe [docs/15-THIN-CLIENT.md](docs/15-THIN-CLIENT.md) |
 | Node.js | `26.7.0` auf dem Referenzhost |
 | Python | `3.14.7` auf dem Referenzhost |
 | XiaoZhi Upstream | `78/xiaozhi-esp32@4632dc51f0a5ad26e08542e131e6e48da41e4ff3` |
